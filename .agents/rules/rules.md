@@ -57,3 +57,5 @@ More detailed guidelines will automatically load into your system context when y
 - **Moxfield Fast Import**: [moxfield_fast_import.md](file:///c:/Users/dougl/Documents/Code/_MTG/.agents/rules/moxfield_fast_import.md) triggers when working in `moxfield_fast_import/`.
 - **Colour Checker**: [colour_checker.md](file:///c:/Users/dougl/Documents/Code/_MTG/.agents/rules/colour_checker.md) triggers when working in `colour_checker/`.
 - **Moxfield CSV Comparator**: [moxfield_csv_comparator.md](file:///c:/Users/dougl/Documents/Code/_MTG/.agents/rules/moxfield_csv_comparator.md) triggers when working in `moxfield_csv_comparator/`.
+- **Regression Testing**: [tests.md](file:///c:/Users/dougl/Documents/Code/_MTG/.agents/rules/tests.md) triggers when writing tests or running runners.
+- **GUI Style Guide**: [gui_style.md](file:///c:/Users/dougl/Documents/Code/_MTG/.agents/rules/gui_style.md) triggers when designing/modifying visual desktop layouts.
