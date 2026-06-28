@@ -2,9 +2,14 @@
 cache/
 
 # Inputs and Outputs directories
+input/
 inputs/
 outputs/
-mock_output/
+ignore/
+duplicate_check/
+scryfall_cache/
+zzz_obselete_moxfield_fast_import/**.csv
+zzz_obselete_moxfield_dedupe/**.csv
 
 # Common local input/output files
 input.txt
