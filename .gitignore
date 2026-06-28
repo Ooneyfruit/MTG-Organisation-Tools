@@ -1,0 +1,17 @@
+# Cache
+cache/
+
+# Inputs and Outputs directories
+inputs/
+outputs/
+mock_output/
+
+# Common local input/output files
+input.txt
+output.txt
+*.log
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
