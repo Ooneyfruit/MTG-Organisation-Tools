@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import logging
 import datetime
 import tkinter as tk
@@ -44,6 +45,7 @@ class MoxfieldImportGui:
         self.root = root
         self.root.title("Moxfield Import - Dry Run & Import Companion")
         self.root.geometry("850x650")
+        self.last_saved_content = ""
         
         # Initialize logging
         self.logger, self.log_filename = setup_logging()
@@ -196,6 +198,9 @@ class MoxfieldImportGui:
             self.lbl_status.config(text="Auto-loaded input.txt on startup", fg="green")
             self.logger.info("Auto-loaded input.txt on startup")
 
+        # Register close handler
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
     def on_lookup_toggle(self):
         if self.var_enable_lookup.get():
             self.chk_wubrg.config(state="normal")
@@ -221,6 +226,7 @@ class MoxfieldImportGui:
                     content = f.read().strip()
                 self.txt_input.delete("1.0", tk.END)
                 self.txt_input.insert("1.0", content)
+                self.last_saved_content = content
                 self.lbl_status.config(text=f"Loaded from {os.path.basename(INPUT_FILE)}", fg="green")
                 self.logger.info(f"Loaded input.txt content")
             except Exception as e:
@@ -235,12 +241,20 @@ class MoxfieldImportGui:
             content = self.txt_input.get("1.0", tk.END).strip()
             with open(INPUT_FILE, 'w', encoding='utf-8') as f:
                 f.write(content)
+            self.last_saved_content = content
             self.lbl_status.config(text=f"Saved to {os.path.basename(INPUT_FILE)}", fg="green")
             self.logger.info(f"Saved textbox content to input.txt")
             messagebox.showinfo("Success", f"Successfully saved input box to {os.path.basename(INPUT_FILE)}")
         except Exception as e:
             self.logger.error(f"Failed to save file: {e}")
             messagebox.showerror("Error", f"Failed to save file: {e}")
+
+    def on_close(self):
+        current_content = self.txt_input.get("1.0", tk.END).strip()
+        if current_content != self.last_saved_content.strip():
+            if not messagebox.askyesno("Are you sure?", "You have unsaved changes in the text input box. Are you sure you want to close without saving?"):
+                return
+        self.root.destroy()
 
     def clear_input(self):
         self.txt_input.delete("1.0", tk.END)
@@ -395,7 +409,7 @@ class MoxfieldImportGui:
             
             try:
                 if raw_str.startswith('@'):
-                    chunk = raw_str[1:]
+                    chunk = raw_str[1:].replace('.', ',')
                     items = chunk.split(',')
                     parsed_list = []
                     current_set = None
@@ -404,7 +418,7 @@ class MoxfieldImportGui:
                         item = item.strip().lower()
                         if not item: continue
                         if i == 0:
-                            m = re.match(r"^(![a-z0-9]{3,4}|[a-z]+)(.*)$", item)
+                            m = re.match(r"^(!(?:[a-z0-9]{3}|[a-z]{4})|[a-z]+)(.*)$", item)
                             if m:
                                 current_set = m.group(1).upper()
                                 cn_raw = m.group(2)
@@ -485,7 +499,7 @@ class MoxfieldImportGui:
                 return
                 
             # Format results
-            headers = ["Set", "CN", "Name", "Type", "Foil", "Condition", "Qty", "Note"]
+            headers = ["Set", "CN", "Qty", "Name", "Type", "Foil", "Condition", "Note"]
             report = format_report_as_ascii(
                 results_dict=results, 
                 headers=headers, 

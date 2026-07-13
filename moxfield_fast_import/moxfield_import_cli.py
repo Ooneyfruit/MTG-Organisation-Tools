@@ -118,7 +118,7 @@ def main():
         print("No valid cards resolved. Exiting.")
         sys.exit(0)
         
-    headers = ["Set", "CN", "Name", "Type", "Foil", "Condition", "Qty", "Note"]
+    headers = ["Set", "CN", "Qty", "Name", "Type", "Foil", "Condition", "Note"]
     report = format_report_as_ascii(
         results_dict=results, 
         headers=headers, 

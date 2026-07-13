@@ -136,6 +136,79 @@ class TestMoxfieldImporterLogic(unittest.TestCase):
         self.assertEqual(len(card_list), 2)
         print("    [PASS] Kept separate due to condition mismatch")
 
+    def test_art_set_and_signature_parsing(self):
+        print("\n[STEP 7a] Running: test_art_set_and_signature_parsing")
+        print("  - Parsing art card token 'ablb19'...")
+        p1 = self.importer.parse_token_string("ablb19")
+        self.assertEqual(p1['front']['set'], "ablb")
+        self.assertEqual(p1['front']['cn'], "19")
+        self.assertFalse(p1['no_signature'])
+        print("    [PASS] Correctly parsed art card 'ablb19' with no_signature=False")
+
+        print("  - Parsing art card token with signature tag 'ablb19*n'...")
+        p2 = self.importer.parse_token_string("ablb19*n")
+        self.assertEqual(p2['front']['set'], "ablb")
+        self.assertEqual(p2['front']['cn'], "19")
+        self.assertTrue(p2['no_signature'])
+        print("    [PASS] Correctly parsed art card 'ablb19*n' with no_signature=True")
+
+        print("  - Testing resolve_name on 4-letter art sets starting with 'a'...")
+        name, lookup = self.importer.resolve_name("ablb", "19", is_token=True)
+        # Since enable_lookup is False, name is '[No Lookup]' and lookup is 'ablb' (not prepended with 't')
+        self.assertEqual(lookup, "ablb")
+        print("    [PASS] Correctly avoided prepending 't' to art set 'ablb'")
+
+        print("  - Testing routing of token 'ablb19*n'...")
+        results = {
+            'single_sided': [], 'ds_fronts': [], 'ds_backs': [],
+            'ds_fronts_dupes': [], 'ds_backs_dupes': [],
+            'regular_cards': [], 'art_cards': [],
+            'new_history': {}, 'dupe_identifiers': []
+        }
+        log_messages = []
+        self.importer._route_token(p2, {}, results, log_messages)
+        self.assertEqual(len(results['art_cards']), 1)
+        self.assertEqual(results['art_cards'][0]['tag'], "No signature.")
+        print("    [PASS] Correctly routed token 'ablb19*n' to art cards and marked 'No signature.' in tags")
+
+        print("  - Testing routing of regular chunk '@ablb19*n'...")
+        results_chunk = {'regular_cards': [], 'art_cards': []}
+        self.importer._route_regular_chunk("@ablb19*n", results_chunk, log_messages)
+        self.assertEqual(len(results_chunk['art_cards']), 1)
+        self.assertEqual(results_chunk['art_cards'][0]['tag'], "No signature.")
+        print("    [PASS] Correctly routed regular chunk '@ablb19*n' and marked 'No signature.' in tags")
+
+    def test_exclamation_mark_parsing(self):
+        print("\n[STEP 7b] Running: test_exclamation_mark_parsing")
+        print("  - Parsing '!mh1262' (Token format with exclamation mark)...")
+        p1 = self.importer.parse_token_string("!mh1262")
+        self.assertEqual(p1['front']['set'], "!mh1")
+        self.assertEqual(p1['front']['cn'], "262")
+        print("    [PASS] Correctly parsed '!mh1262' as set='!mh1' and CN='262'")
+
+        print("  - Testing _route_regular_chunk parsing for '@!mh1262'...")
+        results = {'regular_cards': []}
+        log_messages = []
+        self.importer._route_regular_chunk("@!mh1262", results, log_messages)
+        # _route_regular_chunk will call resolve_name and add to regular_cards list or write warning.
+        # Since enable_lookup is False, resolve_name returns "[No Lookup]", clean_set.
+        # Let's inspect the cards added or warnings logged.
+        self.assertEqual(len(results['regular_cards']), 1)
+        card = results['regular_cards'][0]
+        self.assertEqual(card['set'], "mh1")
+        self.assertEqual(card['cn'], "262")
+        print("    [PASS] Correctly resolved '@!mh1262' set to 'mh1' and CN to '262'")
+
+        print("  - Testing period/comma interchangeability for '@sld7094.2452'...")
+        results2 = {'regular_cards': []}
+        self.importer._route_regular_chunk("@sld7094.2452", results2, log_messages)
+        self.assertEqual(len(results2['regular_cards']), 2)
+        self.assertEqual(results2['regular_cards'][0]['cn'], "7094")
+        self.assertEqual(results2['regular_cards'][1]['cn'], "2452")
+        print("    [PASS] Correctly treated '.' as ',' in '@sld7094.2452'")
+
+
+
     def test_sorting_keys_spells(self):
         print("\n[STEP 8] Running: test_sorting_keys_spells")
         print("  - Sorting key for white monocolor spell...")
@@ -192,6 +265,71 @@ class TestMoxfieldImporterLogic(unittest.TestCase):
         self.assertEqual(get_land_sort_key(['W', 'U'], "Hallowed Fountain"), (2, 'azorius', "hallowed fountain"))
         self.assertEqual(get_land_sort_key(['W', 'B', 'G'], "Sandsteppe Citadel"), (3, '', "sandsteppe citadel"))
         print("    [PASS] Correctly validated land sort hierarchy (Colorless -> Monocolor -> Guild -> 3+ Color)")
+
+    def test_set_ordering_by_entry(self):
+        print("\n[STEP 9b] Running: test_set_ordering_by_entry")
+        # Set up a raw input with a regular set, a token set, and another regular set
+        raw_text = "@mh315/one5/@sld100"
+        session_results = self.importer.run_import_session(raw_text)
+        # unique_sets should present regular sets in order of entry (MH, then SLD) and token sets at the end (TONE)
+        self.assertEqual(session_results['unique_sets'], ["MH", "SLD", "TONE"])
+        print("    [PASS] Correctly ordered sets by entry: MH, SLD, TONE (token set at the end)")
+
+    def test_basic_land_full_art_detection(self):
+        print("\n[STEP 9c] Running: test_basic_land_full_art_detection")
+        from unittest.mock import patch
+        
+        # Mock Scryfall cache lookups for BLB 278 (full art) and MOM 281 (regular)
+        def cache_lookup(query):
+            set_code = query["set"].lower()
+            cn = str(query["collector_number"])
+            if set_code == "blb" and cn == "278":
+                return {
+                    "name": "Forest",
+                    "color_identity": ["G"],
+                    "type_line": "Basic Land — Forest",
+                    "full_art": True
+                }, "path"
+            elif set_code == "mom" and cn == "281":
+                return {
+                    "name": "Forest",
+                    "color_identity": ["G"],
+                    "type_line": "Basic Land — Forest",
+                    "full_art": False
+                }, "path"
+            return None, None
+
+        # Create importer with enable_lookup=False to prevent API calls, but enable WUBRG
+        importer = MoxfieldImporter(enable_lookup=False, enable_wubrg=True, dry_run=True)
+        
+        with patch('scryfall_core.load_from_cache', side_effect=cache_lookup):
+            # Parse input with both cards
+            raw_text = "@blb278/@mom281"
+            session_results = importer.run_import_session(raw_text)
+            
+            # Check table_rows results
+            table_rows = session_results['table_rows']
+            
+            # Find the rows for each card
+            blb_row = next(r for r in table_rows if r[0] == "BLB" and r[1] == "278")
+            mom_row = next(r for r in table_rows if r[0] == "MOM" and r[1] == "281")
+            
+            # Assert BLB 278 is type "Full-Art"
+            self.assertEqual(blb_row[4], "Full-Art")
+            # Assert MOM 281 is type "Regular"
+            self.assertEqual(mom_row[4], "Regular")
+            
+            # Assert they are in separate tables (lists)
+            basic_lands = session_results['basic_land_rows']
+            full_art_lands = session_results['full_art_land_rows']
+            
+            self.assertTrue(any(r[0] == "BLB" and r[1] == "278" for r in full_art_lands))
+            self.assertTrue(any(r[0] == "MOM" and r[1] == "281" for r in basic_lands))
+            self.assertFalse(any(r[0] == "BLB" and r[1] == "278" for r in basic_lands))
+            self.assertFalse(any(r[0] == "MOM" and r[1] == "281" for r in full_art_lands))
+            
+            print("    [PASS] Correctly detected and separated BLB 278 to 'full_art_land_rows' and MOM 281 to 'basic_land_rows'")
+
 
 
 class TestMoxfieldImportGui(unittest.TestCase):

@@ -7,12 +7,15 @@ from pathlib import Path
 from typing import Optional
 
 # Import logic
-from moxfield_binder_logic import assign_cards_to_binders, is_foil
+from moxfield_binder_logic import assign_cards_to_binders, is_foil, load_alkoo_sets, write_alkoo_sets
 
 # --- Configurations ---
 SCRIPT_DIR = Path(__file__).parent
+ALKOO_FILE = SCRIPT_DIR / "alkoo.txt"
+ALKOO_BASE_FILE = SCRIPT_DIR / "alkoo_base.txt"
 INPUTS_DIR = SCRIPT_DIR / "inputs"
 LOGS_DIR = SCRIPT_DIR / "logs"
+
 
 def get_default_path(filename: str) -> Optional[Path]:
     p = INPUTS_DIR / filename
@@ -42,7 +45,8 @@ class MoxfieldBinderGui:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Moxfield Binder Assigner")
-        self.root.geometry("780x680")
+        self.root.geometry("780x790")
+        self.last_saved_content = ""
         
         self.logger = self.setup_logging()
 
@@ -122,6 +126,31 @@ class MoxfieldBinderGui:
 
         files_frame.columnconfigure(1, weight=1)
 
+        # --- ALKOO Set Codes Editor ---
+        alkoo_editor_frame = tk.LabelFrame(root, text="ALKOO Case Set Codes Configuration", font=("Arial", 9, "bold"), padx=10, pady=5)
+        alkoo_editor_frame.pack(fill="x", padx=15, pady=5)
+        
+        editor_btn_frame = tk.Frame(alkoo_editor_frame)
+        editor_btn_frame.pack(fill="x", pady=2)
+        
+        self.lbl_editor_status = tk.Label(editor_btn_frame, text="", fg="green", font=("Arial", 9))
+        self.lbl_editor_status.pack(side="left")
+        
+        btn_clear_sets = tk.Button(editor_btn_frame, text="Clear", command=self.clear_alkoo_sets)
+        btn_clear_sets.pack(side="right", padx=5)
+        
+        btn_reset_sets = tk.Button(editor_btn_frame, text="Reset to Default", command=self.reset_alkoo_sets)
+        btn_reset_sets.pack(side="right", padx=5)
+        
+        btn_save_sets = tk.Button(editor_btn_frame, text="Save to alkoo.txt", command=self.save_alkoo_sets)
+        btn_save_sets.pack(side="right", padx=5)
+        
+        btn_load_sets = tk.Button(editor_btn_frame, text="Load alkoo.txt", command=self.load_alkoo_sets_from_file)
+        btn_load_sets.pack(side="right", padx=5)
+        
+        self.txt_alkoo_sets = scrolledtext.ScrolledText(alkoo_editor_frame, height=3, font=("Courier", 10))
+        self.txt_alkoo_sets.pack(fill="x", pady=2)
+
         act_frame = tk.Frame(root)
         act_frame.pack(fill="x", padx=15, pady=10)
 
@@ -146,6 +175,10 @@ class MoxfieldBinderGui:
         self.logger.addHandler(text_handler)
 
         self.prefill_fields()
+        self.load_alkoo_sets_from_file()
+
+        # Register close handler
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_logging(self) -> logging.Logger:
         LOGS_DIR.mkdir(exist_ok=True)
@@ -226,13 +259,22 @@ class MoxfieldBinderGui:
 
         self.logger.info("Starting Moxfield card categorization assignment...")
         
+        # Get active ALKOO sets from text box
+        content = self.txt_alkoo_sets.get("1.0", tk.END).strip()
+        alkoo_sets = set()
+        for token in content.replace(',', ' ').split():
+            token_clean = token.strip().upper()
+            if token_clean:
+                alkoo_sets.add(token_clean)
+
         try:
             counts, swaps, binders = assign_cards_to_binders(
                 input_csv=input_csv,
                 alkoo_inventory_csv=alkoo_csv,
                 pleather_inventory_csv=pleather_csv,
                 output_dir=OUTPUT_DIR,
-                logger=self.logger
+                logger=self.logger,
+                alkoo_sets=alkoo_sets
             )
             
             self.logger.info("\n" + "="*70)
@@ -286,6 +328,59 @@ class MoxfieldBinderGui:
         except Exception as e:
             self.logger.error(f"Error executing card assignment: {e}", exc_info=True)
             messagebox.showerror("Execution Error", f"An error occurred: {e}")
+
+    def load_alkoo_sets_from_file(self):
+        try:
+            sets = load_alkoo_sets(ALKOO_FILE)
+            self.txt_alkoo_sets.delete("1.0", tk.END)
+            content = ", ".join(sorted(list(sets)))
+            self.txt_alkoo_sets.insert("1.0", content)
+            self.last_saved_content = content
+            self.lbl_editor_status.config(text="Loaded alkoo.txt successfully", fg="green")
+            self.logger.info("Loaded ALKOO set codes from alkoo.txt")
+        except Exception as e:
+            self.logger.error(f"Failed to load alkoo.txt: {e}")
+            messagebox.showerror("Error", f"Failed to load alkoo.txt: {e}")
+
+    def save_alkoo_sets(self):
+        try:
+            content = self.txt_alkoo_sets.get("1.0", tk.END).strip()
+            sets = set()
+            for token in content.replace(',', ' ').split():
+                token_clean = token.strip().upper()
+                if token_clean:
+                    sets.add(token_clean)
+            write_alkoo_sets(sets, ALKOO_FILE)
+            self.last_saved_content = content
+            self.lbl_editor_status.config(text="Saved to alkoo.txt successfully", fg="green")
+            self.logger.info("Saved ALKOO set codes to alkoo.txt")
+            messagebox.showinfo("Success", "Successfully saved ALKOO set codes to alkoo.txt")
+        except Exception as e:
+            self.logger.error(f"Failed to save alkoo.txt: {e}")
+            messagebox.showerror("Error", f"Failed to save alkoo.txt: {e}")
+
+    def on_close(self):
+        current_content = self.txt_alkoo_sets.get("1.0", tk.END).strip()
+        if current_content != self.last_saved_content.strip():
+            if not messagebox.askyesno("Are you sure?", "You have unsaved changes in the text input box. Are you sure you want to close without saving?"):
+                return
+        self.root.destroy()
+
+    def reset_alkoo_sets(self):
+        try:
+            sets = load_alkoo_sets(ALKOO_BASE_FILE, fallback_to_base=True)
+            self.txt_alkoo_sets.delete("1.0", tk.END)
+            self.txt_alkoo_sets.insert("1.0", ", ".join(sorted(list(sets))))
+            self.lbl_editor_status.config(text="Reset to default sets", fg="orange")
+            self.logger.info("Reset ALKOO set codes in UI to default list (from alkoo_base.txt)")
+        except Exception as e:
+            self.logger.error(f"Failed to reset sets: {e}")
+            messagebox.showerror("Error", f"Failed to reset sets: {e}")
+
+    def clear_alkoo_sets(self):
+        self.txt_alkoo_sets.delete("1.0", tk.END)
+        self.lbl_editor_status.config(text="Cleared", fg="black")
+        self.logger.info("Cleared ALKOO set codes text box")
 
 if __name__ == "__main__":
     root = tk.Tk()

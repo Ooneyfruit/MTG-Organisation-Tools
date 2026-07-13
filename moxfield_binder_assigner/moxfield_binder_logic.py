@@ -16,10 +16,68 @@ from _core_tools import scryfall_core
 from _core_tools.sorting_logic import get_card_wubrg_sort_key
 
 # --- Set Codes for ALKOO Case ---
-ALKOO_SETS = {
+DEFAULT_ALKOO_SETS = {
     "DFT", "TLA", "DSK", "EOE", "FDN", "J25",
     "ECL", "SPM", "MH3", "ONE", "SOS", "TDM", "MSH"
 }
+
+def load_alkoo_sets(file_path: Optional[Path] = None, fallback_to_base: bool = True) -> Set[str]:
+    """
+    Loads ALKOO set codes from a file.
+    If the specified file_path doesn't exist, we load from alkoo_base.txt and initialize the file_path with it.
+    """
+    if file_path is None:
+        file_path = SCRIPT_DIR / "alkoo.txt"
+    
+    if file_path.is_file():
+        try:
+            with file_path.open('r', encoding='utf-8') as f:
+                content = f.read()
+            sets = set()
+            for token in content.replace(',', ' ').split():
+                token_clean = token.strip().upper()
+                if token_clean:
+                    sets.add(token_clean)
+            return sets
+        except Exception:
+            pass
+
+    # If active file doesn't exist, try alkoo_base.txt
+    base_path = SCRIPT_DIR / "alkoo_base.txt"
+    base_sets = set()
+    if fallback_to_base and base_path.is_file():
+        try:
+            with base_path.open('r', encoding='utf-8') as f:
+                content = f.read()
+            for token in content.replace(',', ' ').split():
+                token_clean = token.strip().upper()
+                if token_clean:
+                    base_sets.add(token_clean)
+        except Exception:
+            pass
+
+    if not base_sets:
+        base_sets = set(DEFAULT_ALKOO_SETS)
+
+    # Initialize alkoo.txt with the base set
+    try:
+        write_alkoo_sets(base_sets, file_path)
+    except Exception:
+        pass
+
+    return base_sets
+
+def write_alkoo_sets(sets: Set[str], file_path: Optional[Path] = None):
+    """Writes the set codes (one per line) to the specified file."""
+    if file_path is None:
+        file_path = SCRIPT_DIR / "alkoo.txt"
+    sorted_sets = sorted(list(sets))
+    with file_path.open('w', encoding='utf-8') as f:
+        f.write("\n".join(sorted_sets) + "\n")
+
+# Default ALKOO_SETS is loaded from the files
+ALKOO_SETS = load_alkoo_sets()
+
 
 def is_foil(row: Dict) -> bool:
     """Returns True if the card row is a foil or etched version."""
@@ -71,12 +129,16 @@ def assign_cards_to_binders(
     alkoo_inventory_csv: Path,
     pleather_inventory_csv: Path,
     output_dir: Path,
-    logger: logging.Logger
+    logger: logging.Logger,
+    alkoo_sets: Optional[Set[str]] = None
 ) -> Tuple[Dict[str, int], List[str], Dict[str, List[str]]]:
     """
     Categorizes the incoming CSV card list into 6 binders based on the rule flow.
     Returns: (counts_dict, swap_action_strings, card_names_per_binder_dict)
     """
+    if alkoo_sets is None:
+        alkoo_sets = load_alkoo_sets()
+
     logger.info("Loading existing collection inventories...")
     alkoo_inv = load_existing_inventory(alkoo_inventory_csv)
     pleather_inv = load_existing_inventory(pleather_inventory_csv)
@@ -194,7 +256,7 @@ def assign_cards_to_binders(
 
         # Rule 2: Non-land in ALKOO Set Codes
         card_is_land = "land" in type_line.lower()
-        if not card_is_land and set_code in ALKOO_SETS:
+        if not card_is_land and set_code in alkoo_sets:
             if name_key in alkoo_inv:
                 has_foil_existing = alkoo_inv[name_key]["has_foil"]
                 if not has_foil_existing and card_is_foil:

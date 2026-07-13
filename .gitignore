@@ -20,3 +20,5 @@ output.txt
 __pycache__/
 *.pyc
 *.pyo
+
+alkoo.txt

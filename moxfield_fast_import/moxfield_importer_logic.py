@@ -98,7 +98,9 @@ class MoxfieldImporter:
     def resolve_name(self, set_code, collector_number, is_token=True):
         clean_code = set_code.lower().lstrip('!')
         if is_token:
-            if clean_code.startswith('t') and len(clean_code) >= 4:
+            if clean_code.startswith('a') and len(clean_code) == 4:
+                lookup_code = clean_code
+            elif clean_code.startswith('t') and len(clean_code) >= 4:
                 lookup_code = clean_code
             else:
                 lookup_code = f"t{clean_code}"
@@ -176,7 +178,7 @@ class MoxfieldImporter:
         count_match = re.search(r'\d+', mods)
         count = int(count_match.group()) if count_match else 1
         
-        SET_CODE_REGEX = r"(?:![\w]{3,4}|[a-z]+)"
+        SET_CODE_REGEX = r"(?:!(?:[a-z0-9]{3}|[a-z]{4})|[a-z]+)"
 
         # Check for condition in token (like one5sp or one5*fsp)
         condition_str = "Near Mint"
@@ -193,7 +195,8 @@ class MoxfieldImporter:
                 'count': count, 
                 'foil': is_foil, 
                 'condition': condition_str, 
-                'raw': raw_token_string
+                'raw': raw_token_string,
+                'no_signature': 'n' in mods
             }
             if back_data: 
                 out['back'] = back_data
@@ -272,7 +275,7 @@ class MoxfieldImporter:
         card_list.append(new_card)
 
     def _route_regular_chunk(self, chunk, results, log_messages):
-        chunk = chunk[1:] # Strip the '@' trigger
+        chunk = chunk[1:].replace('.', ',') # Strip the '@' trigger and treat '.' as ','
         items = chunk.split(',')
         current_set = None
         
@@ -282,7 +285,7 @@ class MoxfieldImporter:
                 continue
             
             if i == 0:
-                m = re.match(r"^(![a-z0-9]{3,4}|[a-z]+)(.*)$", item)
+                m = re.match(r"^(!(?:[a-z0-9]{3}|[a-z]{4})|[a-z]+)(.*)$", item)
                 if m:
                     current_set = m.group(1)
                     cn_raw = m.group(2)
@@ -296,6 +299,18 @@ class MoxfieldImporter:
             if not current_set: 
                 continue
             
+            has_no_sig = False
+            if '*' in cn_raw:
+                parts = cn_raw.split('*')
+                new_parts = []
+                for p in parts:
+                    if 'n' in p:
+                        has_no_sig = True
+                        p = p.replace('n', '')
+                    if p:
+                        new_parts.append(p)
+                cn_raw = '*'.join(new_parts)
+
             card_count = 1
             mult_match = re.search(r'\*(\d+)$', cn_raw)
             if mult_match:
@@ -322,14 +337,18 @@ class MoxfieldImporter:
                     self.logger.warning(warn_msg)
                 continue
                 
-            self.add_or_merge_card(results['regular_cards'], {
+            clean_set = full_set_code.lower().lstrip('!')
+            is_art_set = clean_set.startswith('a') and len(clean_set) == 4
+            target_list = results['art_cards'] if is_art_set else results['regular_cards']
+            
+            self.add_or_merge_card(target_list, {
                 'set': full_set_code,
                 'cn': cn_raw,
                 'name': card_name,
                 'foil': is_foil,
                 'condition': condition_str,
                 'count': card_count,
-                'tag': "",
+                'tag': "No signature." if has_no_sig else "",
                 'front_name': card_name
             })
 
@@ -344,9 +363,13 @@ class MoxfieldImporter:
                 card_data['count'] = count
                 card_data['foil'] = is_foil
                 card_data['condition'] = condition_str
-                card_data['tag'] = ""
+                card_data['tag'] = "No signature." if parsed_token.get('no_signature') else ""
                 card_data['front_name'] = card_data['name']
-                if parsed_token['type'] == 'DS_SINGLE_ENTRY': 
+                clean_set = parsed_token['front']['set'].lower().lstrip('!')
+                is_art_set = clean_set.startswith('a') and len(clean_set) == 4
+                if is_art_set:
+                    self.add_or_merge_card(results['art_cards'], card_data)
+                elif parsed_token['type'] == 'DS_SINGLE_ENTRY': 
                     self.add_or_merge_card(results['ds_fronts'], card_data)
                 else: 
                     self.add_or_merge_card(results['single_sided'], card_data)
@@ -366,8 +389,9 @@ class MoxfieldImporter:
                 back_card['condition'] = condition_str
                 back_card['front_name'] = front_card['name']
                 
-                front_card['tag'] = f"Back is {back_card['set'].upper()} {back_card['cn']} ({back_card['name']})"
-                back_card['tag'] = f"Front is {front_card['set'].upper()} {front_card['cn']} ({front_card['name']})"
+                no_sig_suffix = ", No signature." if parsed_token.get('no_signature') else ""
+                front_card['tag'] = f"Back is {back_card['set'].upper()} {back_card['cn']} ({back_card['name']}){no_sig_suffix}"
+                back_card['tag'] = f"Front is {front_card['set'].upper()} {front_card['cn']} ({front_card['name']}){no_sig_suffix}"
                 
                 card_identifier = f"{front_card['set']}:{front_card['cn']}|{back_card['set']}:{back_card['cn']}"
                 
@@ -406,6 +430,7 @@ class MoxfieldImporter:
             'single_sided': [], 'ds_fronts': [], 'ds_backs': [],
             'ds_fronts_dupes': [], 'ds_backs_dupes': [],
             'regular_cards': [], 
+            'art_cards': [],
             'new_history': {}, 
             'dupe_identifiers': []
         }
@@ -465,6 +490,7 @@ class MoxfieldImporter:
         scryfall_resolved_data = {}
         all_parsed_cards = (
             results['regular_cards'] + 
+            results['art_cards'] +
             results['single_sided'] + 
             results['ds_fronts'] + 
             results['ds_backs'] + 
@@ -496,7 +522,8 @@ class MoxfieldImporter:
                 if data:
                     scryfall_resolved_data[qkey] = {
                         'color_identity': data.get('color_identity', []),
-                        'type_line': data.get('type_line', "")
+                        'type_line': data.get('type_line', ""),
+                        'full_art': data.get('full_art', False)
                     }
                 elif self.enable_lookup:
                     if qkey not in seen_queries:
@@ -514,7 +541,8 @@ class MoxfieldImporter:
                         if data:
                             scryfall_resolved_data[qkey] = {
                                 'color_identity': data.get('color_identity', []),
-                                'type_line': data.get('type_line', "")
+                                'type_line': data.get('type_line', ""),
+                                'full_art': data.get('full_art', False)
                             }
                 except Exception as e:
                     warnings.append(f"!! Warning: Failed to query Scryfall API: {e}")
@@ -522,39 +550,46 @@ class MoxfieldImporter:
                         self.logger.error(f"Failed to query Scryfall API metadata: {e}")
 
         # Build list of cards for table
-        # Row layout: [set, cn, name, type, foil, condition, qty, note, color_identity, type_line, front_name]
+        # Row layout: [set, cn, qty, name, type, foil, condition, note, color_identity, type_line, front_name]
         table_rows = []
         def get_card_metadata(card):
             qkey = (card['set'].lower(), str(card['cn']).lower())
-            meta = scryfall_resolved_data.get(qkey, {'color_identity': [], 'type_line': ""})
-            return meta.get('color_identity', []), meta.get('type_line', "")
+            meta = scryfall_resolved_data.get(qkey, {'color_identity': [], 'type_line': "", 'full_art': False})
+            return meta.get('color_identity', []), meta.get('type_line', ""), meta.get('full_art', False)
 
         for card in results['regular_cards']:
-            ci, tl = get_card_metadata(card)
-            table_rows.append([card['set'].upper(), card['cn'], card['name'], "Regular", "Yes" if card['foil'] else "No", card['condition'], card['count'], "", ci, tl, card.get('front_name', card['name'])])
+            ci, tl, fa = get_card_metadata(card)
+            is_basic_land = "basic" in tl.lower() and "land" in tl.lower()
+            card_type = "Full-Art" if (is_basic_land and fa) else "Regular"
+            table_rows.append([card['set'].upper(), card['cn'], card['count'], card['name'], card_type, "Yes" if card['foil'] else "No", card['condition'], card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
+            
+        for card in results['art_cards']:
+            ci, tl, fa = get_card_metadata(card)
+            table_rows.append([card['set'].upper(), card['cn'], card['count'], card['name'], "Art Card", "Yes" if card['foil'] else "No", card['condition'], card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
             
         for card in results['single_sided']:
-            ci, tl = get_card_metadata(card)
-            table_rows.append([card['set'].upper(), card['cn'], card['name'], "SS Token", "Yes" if card['foil'] else "No", "N/A", card['count'], "", ci, tl, card.get('front_name', card['name'])])
+            ci, tl, fa = get_card_metadata(card)
+            table_rows.append([card['set'].upper(), card['cn'], card['count'], card['name'], "SS Token", "Yes" if card['foil'] else "No", "N/A", card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
             
         for card in results['ds_fronts']:
-            ci, tl = get_card_metadata(card)
-            table_rows.append([card['set'].upper(), card['cn'], card['name'], "DS Front", "Yes" if card['foil'] else "No", "N/A", card['count'], card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
+            ci, tl, fa = get_card_metadata(card)
+            table_rows.append([card['set'].upper(), card['cn'], card['count'], card['name'], "DS Front", "Yes" if card['foil'] else "No", "N/A", card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
             
         for card in results['ds_backs']:
-            ci, tl = get_card_metadata(card)
-            table_rows.append([card['set'].upper(), card['cn'], card['name'], "DS Back", "Yes" if card['foil'] else "No", "N/A", card['count'], card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
+            ci, tl, fa = get_card_metadata(card)
+            table_rows.append([card['set'].upper(), card['cn'], card['count'], card['name'], "DS Back", "Yes" if card['foil'] else "No", "N/A", card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
             
         for card in results['ds_fronts_dupes']:
-            ci, tl = get_card_metadata(card)
-            table_rows.append([card['set'].upper(), card['cn'], card['name'], "DS Front (Dupe)", "Yes" if card['foil'] else "No", "N/A", card['count'], card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
+            ci, tl, fa = get_card_metadata(card)
+            table_rows.append([card['set'].upper(), card['cn'], card['count'], card['name'], "DS Front (Dupe)", "Yes" if card['foil'] else "No", "N/A", card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
             
         for card in results['ds_backs_dupes']:
-            ci, tl = get_card_metadata(card)
-            table_rows.append([card['set'].upper(), card['cn'], card['name'], "DS Back (Dupe)", "Yes" if card['foil'] else "No", "N/A", card['count'], card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
+            ci, tl, fa = get_card_metadata(card)
+            table_rows.append([card['set'].upper(), card['cn'], card['count'], card['name'], "DS Back (Dupe)", "Yes" if card['foil'] else "No", "N/A", card.get('tag', ""), ci, tl, card.get('front_name', card['name'])])
             
         # Group and Sort Spells/Lands
         basic_land_rows = []
+        full_art_land_rows = []
         non_basic_land_rows = []
         spell_rows = []
         
@@ -562,7 +597,7 @@ class MoxfieldImporter:
             for row in table_rows:
                 is_land = False
                 is_basic = False
-                if row[3] == "Regular":
+                if row[4] in ["Regular", "Full-Art"]:
                     type_line = row[9]
                     if "land" in type_line.lower():
                         is_land = True
@@ -570,39 +605,93 @@ class MoxfieldImporter:
                             is_basic = True
                 
                 if is_basic:
-                    basic_land_rows.append(row)
+                    if row[4] == "Full-Art":
+                        full_art_land_rows.append(row)
+                    else:
+                        basic_land_rows.append(row)
                 elif is_land:
                     non_basic_land_rows.append(row)
                 else:
                     spell_rows.append(row)
             
             # Sort non-basic and basic lands
-            non_basic_land_rows.sort(key=lambda x: get_land_sort_key(x[8], x[2]))
-            basic_land_rows.sort(key=lambda x: get_land_sort_key(x[8], x[2]))
+            non_basic_land_rows.sort(key=lambda x: get_land_sort_key(x[8], x[3]))
+            basic_land_rows.sort(key=lambda x: get_land_sort_key(x[8], x[3]))
+            full_art_land_rows.sort(key=lambda x: get_land_sort_key(x[8], x[3]))
         else:
-            table_rows.sort(key=lambda x: (x[3], x[0], x[1]))
+            table_rows.sort(key=lambda x: (x[4], x[0], x[1]))
             spell_rows = table_rows
+
+        # Helper to normalize set code similar to resolve_name
+        def get_normalized_set_code(set_code, is_token):
+            clean_code = set_code.lower().lstrip('!')
+            if is_token:
+                if clean_code.startswith('t') and len(clean_code) >= 4:
+                    lookup_code = clean_code
+                else:
+                    lookup_code = f"t{clean_code}"
+            else:
+                lookup_code = clean_code
+            return lookup_code.upper()
+
+        # Determine order of entry for sets
+        set_order_of_entry = []
+        seen_sets = set()
+        for raw_str in raw_input_strings:
+            raw_str = raw_str.strip()
+            if not raw_str:
+                continue
+            if raw_str.startswith('@'):
+                chunk = raw_str[1:].replace('.', ',')
+                items = chunk.split(',')
+                if items:
+                    first_item = items[0].strip().lower()
+                    m = re.match(r"^(!(?:[a-z0-9]{3}|[a-z]{4})|[a-z]+)", first_item)
+                    if m:
+                        normalized = get_normalized_set_code(m.group(1), is_token=False)
+                        if normalized not in seen_sets:
+                            seen_sets.add(normalized)
+                            set_order_of_entry.append(normalized)
+            else:
+                parsed = self.parse_token_string(raw_str)
+                if parsed['type'] != 'UNKNOWN':
+                    for key in ['front', 'back']:
+                        if key in parsed and parsed[key] and 'set' in parsed[key]:
+                            normalized = get_normalized_set_code(parsed[key]['set'], is_token=True)
+                            if normalized not in seen_sets:
+                                seen_sets.add(normalized)
+                                set_order_of_entry.append(normalized)
 
         # Group spells by set code
         set_groups = defaultdict(list)
         for row in spell_rows:
             set_code = row[0]
             set_groups[set_code].append(row)
-            
-        unique_sets = sorted(set_groups.keys())
+
+        all_set_codes = list(set_groups.keys())
         token_sets_detected = set()
         
         if scryfall_core_loaded:
             try:
-                for set_code in unique_sets:
+                for set_code in all_set_codes:
                     if scryfall_core.is_token_set(set_code):
                         token_sets_detected.add(set_code.upper())
             except Exception:
                 pass
-        for set_code in unique_sets:
+        for set_code in all_set_codes:
             if set_code.upper() not in token_sets_detected:
                 if set_code.upper().startswith('T') and len(set_code) >= 4:
                     token_sets_detected.add(set_code.upper())
+
+        entry_index = {code: i for i, code in enumerate(set_order_of_entry)}
+        
+        regular_sets = [s for s in all_set_codes if s.upper() not in token_sets_detected]
+        token_sets = [s for s in all_set_codes if s.upper() in token_sets_detected]
+        
+        regular_sets.sort(key=lambda s: entry_index.get(s.upper(), len(set_order_of_entry)))
+        token_sets.sort(key=lambda s: entry_index.get(s.upper(), len(set_order_of_entry)))
+        
+        unique_sets = regular_sets + token_sets
 
         # Sort spells in each group individually
         if self.enable_wubrg:
@@ -611,11 +700,11 @@ class MoxfieldImporter:
                 if set_code.upper() in token_sets_detected:
                     def get_token_sort_key(row):
                         front_name = row[10]
-                        side_key = 1 if "Back" in row[3] else 0
-                        return (front_name.lower(), side_key, row[2].lower())
+                        side_key = 1 if "Back" in row[4] else 0
+                        return (front_name.lower(), side_key, row[3].lower())
                     group_rows.sort(key=get_token_sort_key)
                 else:
-                    group_rows.sort(key=lambda x: (get_non_land_wubrg_key(x[8]), x[2].lower()))
+                    group_rows.sort(key=lambda x: (get_non_land_wubrg_key(x[8]), x[3].lower()))
 
         if self.logger:
             self.logger.info(f"Categorized output card sets: {len(spell_rows)} spells inside {len(unique_sets)} sets ({len(token_sets_detected)} token sets), {len(non_basic_land_rows)} utility lands, {len(basic_land_rows)} basic lands.")
@@ -635,6 +724,7 @@ class MoxfieldImporter:
             self.write_moxfield_csv(f"{timestamp}-double-sided-fronts-dupes.csv", results['ds_fronts_dupes'])
             self.write_moxfield_csv(f"{timestamp}-double-sided-backs-dupes.csv", results['ds_backs_dupes'])
             self.write_moxfield_csv(f"{timestamp}-regular-cards.csv", results['regular_cards'])
+            self.write_moxfield_csv(f"{timestamp}-art-cards.csv", results['art_cards'])
             
             files_written.append(f"CSV files generated in outputs/ (timestamp: {timestamp})")
             
@@ -656,27 +746,29 @@ class MoxfieldImporter:
         # Aggregate set totals
         set_counts = {}
         for r in table_rows:
-            if r[3] in ["DS Back", "DS Back (Dupe)"]:
+            if r[4] in ["DS Back", "DS Back (Dupe)"]:
                 continue
             set_code = r[0]
-            set_counts[set_code] = set_counts.get(set_code, 0) + r[6]
+            set_counts[set_code] = set_counts.get(set_code, 0) + r[2]
         sorted_sets = sorted(set_counts.items(), key=lambda x: x[1], reverse=True)
 
         regular_qty = sum(card['count'] for card in results['regular_cards'])
+        art_qty = sum(card['count'] for card in results['art_cards'])
         ss_token_qty = sum(card['count'] for card in results['single_sided'])
         ds_front_qty = sum(card['count'] for card in results['ds_fronts'])
         ds_front_dupe_qty = sum(card['count'] for card in results['ds_fronts_dupes'])
-        total_cards = sum(r[6] for r in table_rows)
-        foil_cards = sum(r[6] for r in table_rows if r[4] == "Yes")
+        total_cards = sum(r[2] for r in table_rows)
+        foil_cards = sum(r[2] for r in table_rows if r[5] == "Yes")
         non_foil_cards = total_cards - foil_cards
         
         upgrades_count = sum(1 for key in results['new_history'] if key in original_history_keys)
         new_unique_ds_count = sum(1 for key in results['new_history'] if key not in original_history_keys)
         dupes_count = len(results['dupe_identifiers'])
-
+ 
         return {
             'total_cards': total_cards,
             'regular_qty': regular_qty,
+            'art_qty': art_qty,
             'ss_token_qty': ss_token_qty,
             'ds_front_qty': ds_front_qty,
             'ds_front_dupe_qty': ds_front_dupe_qty,
@@ -691,6 +783,7 @@ class MoxfieldImporter:
             'set_groups': set_groups,
             'non_basic_land_rows': non_basic_land_rows,
             'basic_land_rows': basic_land_rows,
+            'full_art_land_rows': full_art_land_rows,
             'table_rows': table_rows,
             'files_written': files_written,
             'unique_sets': unique_sets
@@ -708,6 +801,7 @@ def format_report_as_ascii(results_dict, headers, append_table_callback, enable_
     out.write("-" * 35 + "\n")
     out.write(f"  Total Cards (for Moxfield import):  {results_dict['total_cards']}\n")
     out.write(f"  ├── Regular Cards (Non-token):      {results_dict['regular_qty']}\n")
+    out.write(f"  ├── Art Cards:                      {results_dict['art_qty']}\n")
     out.write(f"  └── Tokens (Total physical count):  {results_dict['ss_token_qty'] + results_dict['ds_front_qty'] + results_dict['ds_front_dupe_qty']}\n")
     out.write(f"      ├── Single-Sided:               {results_dict['ss_token_qty']}\n")
     out.write(f"      └── Double-Sided (Unique):      {results_dict['ds_front_qty']}\n")
@@ -769,6 +863,11 @@ def format_report_as_ascii(results_dict, headers, append_table_callback, enable_
             report_string += append_table_callback(headers, results_dict['non_basic_land_rows'])
             sub_idx += 1
             
+        if results_dict.get('full_art_land_rows'):
+            report_string += f"\n[5.{sub_idx}] SET: FULL-ART BASIC LAND DETAILS\n" + "-" * 35 + "\n"
+            report_string += append_table_callback(headers, results_dict['full_art_land_rows'])
+            sub_idx += 1
+
         if results_dict['basic_land_rows']:
             report_string += f"\n[5.{sub_idx}] SET: BASIC LAND DETAILS\n" + "-" * 35 + "\n"
             report_string += append_table_callback(headers, results_dict['basic_land_rows'])

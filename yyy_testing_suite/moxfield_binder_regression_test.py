@@ -23,7 +23,9 @@ from moxfield_binder_logic import (
     is_basic_land,
     load_existing_inventory,
     assign_cards_to_binders,
-    is_foil
+    is_foil,
+    load_alkoo_sets,
+    write_alkoo_sets
 )
 
 # Test Data Paths (pointing to directory under yyy_testing_suite)
@@ -155,6 +157,54 @@ class TestBinderClassificationLogic(unittest.TestCase):
         self.assertTrue(TEST_OUTPUT_DIR.exists())
         files = list(TEST_OUTPUT_DIR.glob("*"))
         self.assertGreater(len(files), 0)
+
+class TestAlkooSets(unittest.TestCase):
+    def setUp(self):
+        self.temp_file = Path(__file__).parent / "temp_alkoo.txt"
+        if self.temp_file.exists():
+            self.temp_file.unlink()
+
+    def tearDown(self):
+        if self.temp_file.exists():
+            self.temp_file.unlink()
+
+    def test_load_and_write_alkoo_sets(self):
+        test_sets = {"MH3", "DFT", "ONE"}
+        write_alkoo_sets(test_sets, self.temp_file)
+        
+        loaded = load_alkoo_sets(self.temp_file, fallback_to_base=False)
+        self.assertEqual(loaded, test_sets)
+
+    @patch('_core_tools.scryfall_core.load_from_cache')
+    @patch('_core_tools.scryfall_core.resolve_cards')
+    def test_custom_alkoo_sets_routing(self, mock_resolve, mock_cache):
+        # We specify a custom set set code (e.g. "CUST") and check if it gets routed to ALKOO Case
+        def cache_lookup(query):
+            return {"name": query["name"], "type_line": "Creature", "prices": {"usd": "0.10", "eur": "0.10"}, "full_art": False}, "path"
+        mock_cache.side_effect = cache_lookup
+
+        # Make input rows contain a card with Edition="CUST"
+        # We will pass {"CUST"} as the custom alkoo_sets
+        logger = logging.getLogger("Test")
+        logger.setLevel(logging.ERROR)
+        
+        counts, swaps, binders = assign_cards_to_binders(
+            input_csv=TEST_INPUT,
+            alkoo_inventory_csv=TEST_ALKOO,
+            pleather_inventory_csv=TEST_PLEATHER,
+            output_dir=TEST_OUTPUT_DIR,
+            logger=logger,
+            alkoo_sets={"CUST"}
+        )
+        
+        # Verify that any card with edition "CUST" is routed to ALKOO Case
+        # In test_input_cards.csv, there is a card like 'Expensive Non-Land' which has edition 'DFT'.
+        # Let's verify that with alkoo_sets={"CUST"}, 'DFT' card is NOT in ALKOO Case (instead it goes to Pleather because it's cheap and not in alkoo_sets)
+        alkoo_binder_names = [r["Name"] for r in binders["Binder - ALKOO Case"]]
+        # In the original test, ExistingALKOOCard (Edition: DFT) would have gone to ALKOO case or duplicates.
+        # Now DFT is not in alkoo_sets, so it shouldn't go to ALKOO Case.
+        self.assertNotIn("ExistingALKOOCard", alkoo_binder_names)
+
 
 if __name__ == "__main__":
     unittest.main()
