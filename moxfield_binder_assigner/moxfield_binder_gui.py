@@ -1,6 +1,7 @@
 import logging
 import sys
 import datetime
+import json
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 from pathlib import Path
@@ -203,13 +204,49 @@ class MoxfieldBinderGui:
         return logger
 
     def prefill_fields(self):
-        if DEFAULT_INPUT:
-            self.ent_input.insert(0, str(DEFAULT_INPUT))
-        if DEFAULT_ALKOO:
-            self.ent_alkoo.insert(0, str(DEFAULT_ALKOO))
-        if DEFAULT_PLEATHER:
-            self.ent_pleather.insert(0, str(DEFAULT_PLEATHER))
-        self.logger.info("Initialized file configuration fields with available test defaults.")
+        config_path = SCRIPT_DIR / "last_inputs.json"
+        loaded_last_used = False
+        if config_path.is_file():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                input_csv = data.get("input_csv", "")
+                alkoo_csv = data.get("alkoo_csv", "")
+                pleather_csv = data.get("pleather_csv", "")
+                
+                if input_csv:
+                    self.ent_input.insert(0, input_csv)
+                if alkoo_csv:
+                    self.ent_alkoo.insert(0, alkoo_csv)
+                if pleather_csv:
+                    self.ent_pleather.insert(0, pleather_csv)
+                loaded_last_used = True
+                self.logger.info("Loaded last used file configuration paths from last_inputs.json.")
+            except Exception as e:
+                self.logger.warning(f"Failed to load last_inputs.json: {e}")
+                
+        if not loaded_last_used:
+            if DEFAULT_INPUT:
+                self.ent_input.insert(0, str(DEFAULT_INPUT))
+            if DEFAULT_ALKOO:
+                self.ent_alkoo.insert(0, str(DEFAULT_ALKOO))
+            if DEFAULT_PLEATHER:
+                self.ent_pleather.insert(0, str(DEFAULT_PLEATHER))
+            self.logger.info("Initialized file configuration fields with available test defaults.")
+
+    def save_last_used_paths(self):
+        config_path = SCRIPT_DIR / "last_inputs.json"
+        try:
+            data = {
+                "input_csv": self.ent_input.get().strip(),
+                "alkoo_csv": self.ent_alkoo.get().strip(),
+                "pleather_csv": self.ent_pleather.get().strip()
+            }
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+            self.logger.info("Saved current file configuration paths to last_inputs.json.")
+        except Exception as e:
+            self.logger.warning(f"Failed to save last_inputs.json: {e}")
 
     def browse_input(self):
         filename = filedialog.askopenfilename(
@@ -252,6 +289,8 @@ class MoxfieldBinderGui:
         if not pleather_csv.is_file():
             messagebox.showerror("Error", f"Existing Small Pleather CSV not found:\n{pleather_csv}")
             return
+
+        self.save_last_used_paths()
 
         self.txt_logs.configure(state='normal')
         self.txt_logs.delete("1.0", tk.END)
@@ -300,9 +339,8 @@ class MoxfieldBinderGui:
                     for key in ordered_keys:
                         name, edition, cn, foil, cond = key
                         count = tallied[key]
-                        details = f"{name} (Edition: {edition}, CN: {cn}, Foil: {foil}, Condition: {cond})"
-                        qty_str = f" [{count}x]"
-                        self.logger.info(f"   - {details}{qty_str}")
+                        details = f"{count}x {name} (Edition: {edition}, CN: {cn}, Foil: {foil}, Condition: {cond})"
+                        self.logger.info(f"   - {details}")
                 else:
                     self.logger.info("   (Empty)")
 
@@ -364,6 +402,7 @@ class MoxfieldBinderGui:
         if current_content != self.last_saved_content.strip():
             if not messagebox.askyesno("Are you sure?", "You have unsaved changes in the text input box. Are you sure you want to close without saving?"):
                 return
+        self.save_last_used_paths()
         self.root.destroy()
 
     def reset_alkoo_sets(self):

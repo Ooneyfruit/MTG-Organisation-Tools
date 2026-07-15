@@ -75,9 +75,28 @@ def load_from_cache(card_parsed):
                     data = json.load(f)
                     if "scryfall_data" in data and "type_line" in data["scryfall_data"]:
                         scry_data = data["scryfall_data"]
-                        if "prices" not in scry_data or "full_art" not in scry_data:
+                        if (
+                            "prices" not in scry_data
+                            or "full_art" not in scry_data
+                            or "frame_effects" not in scry_data
+                            or "promo_types" not in scry_data
+                            or "promo" not in scry_data
+                        ):
                             # Out of date cache schema; return None to trigger fresh fetch
                             continue
+                        
+                        # Validate that the cached name matches the requested name (if provided)
+                        query_name = card_parsed.get("name")
+                        scry_name = scry_data.get("name")
+                        if query_name and scry_name:
+                            def norm(n):
+                                return "".join(c for c in n.lower() if c.isalnum())
+                            q_norm = norm(query_name)
+                            s_norm = norm(scry_name)
+                            if q_norm != s_norm and not s_norm.startswith(q_norm) and not q_norm.startswith(s_norm):
+                                # Name mismatch! This cache file belongs to a different card (poisoned cache).
+                                continue
+                                
                         return scry_data, filepath
             except Exception:
                 pass
@@ -107,7 +126,11 @@ def save_to_cache(card_parsed, scryfall_data, query_type_used, query_params_used
         "color_identity": scryfall_data.get("color_identity", []),
         "type_line": scryfall_data.get("type_line", ""),
         "prices": scryfall_data.get("prices", {}),
-        "full_art": scryfall_data.get("full_art", False)
+        "full_art": scryfall_data.get("full_art", False),
+        "frame_effects": scryfall_data.get("frame_effects", []),
+        "promo_types": scryfall_data.get("promo_types", []),
+        "promo": scryfall_data.get("promo", False),
+        "border_color": scryfall_data.get("border_color", "black")
     }
     
     endpoint_templates = {

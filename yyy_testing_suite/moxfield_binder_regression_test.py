@@ -78,7 +78,11 @@ class TestScryfallCacheHealing(unittest.TestCase):
                 "color_identity": ["W"],
                 "type_line": "Creature — Human",
                 "prices": {"usd": "1.50", "eur": "1.20"},
-                "full_art": False
+                "full_art": False,
+                "frame_effects": [],
+                "promo_types": [],
+                "promo": False,
+                "border_color": "black"
             }
         }
         with open(self.filepath, 'w', encoding='utf-8') as f:
@@ -143,8 +147,8 @@ class TestBinderClassificationLogic(unittest.TestCase):
         )
 
         # 1. Check foil upgrades (swaps)
-        self.assertIn("ALKOO Case: Swap out non-foil 'ExistingALKOOCard' with incoming foil", swaps)
-        self.assertIn("Small Pleather: Swap out non-foil 'ExistingPleatherCard' with incoming foil", swaps)
+        self.assertIn("ALKOO Case: Swap out existing non-foil version of 'ExistingALKOOCard' (DFT) (Score: 0.0) with incoming fancier foil version (Score: 100.0)", swaps)
+        self.assertIn("Small Pleather: Swap out existing non-foil version of 'ExistingPleatherCard' (Score: 0.0) with incoming fancier foil version (Score: 100.0)", swaps)
 
         # 2. Check internal duplicate routing (NewPleatherCard twice in input, row 8 & 9)
         # One copy should go to Small Pleather, the duplicate one to Duplicates/Unwanted
@@ -204,6 +208,251 @@ class TestAlkooSets(unittest.TestCase):
         # In the original test, ExistingALKOOCard (Edition: DFT) would have gone to ALKOO case or duplicates.
         # Now DFT is not in alkoo_sets, so it shouldn't go to ALKOO Case.
         self.assertNotIn("ExistingALKOOCard", alkoo_binder_names)
+
+
+class TestBasicLandsDeduplication(unittest.TestCase):
+    @patch('_core_tools.scryfall_core.load_from_cache')
+    @patch('_core_tools.scryfall_core.resolve_cards')
+    def test_basic_lands_not_deduplicated(self, mock_resolve, mock_cache):
+        # We simulate incoming rows with multiple Forest entries
+        temp_input = Path(__file__).parent / "temp_basics_test.csv"
+        csv_content = (
+            '"Count","Name","Edition","Condition","Language","Foil","Collector Number","Alter","Proxy","Purchase Price"\n'
+            '"1","Forest","BLB","Near Mint","English","","278","","",""\n'
+            '"1","Forest","BLB","Near Mint","English","foil","278","","",""\n'
+            '"1","Island","BLB","Near Mint","English","","279","","",""\n'
+        )
+        with open(temp_input, 'w', encoding='utf-8') as f:
+            f.write(csv_content)
+
+        def cache_lookup(query):
+            name = query["name"]
+            if name == "Forest":
+                return {"name": "Forest", "type_line": "Basic Land — Forest", "prices": {"usd": "0.05", "eur": "0.05"}, "full_art": False}, "path"
+            elif name == "Island":
+                return {"name": "Island", "type_line": "Basic Land — Island", "prices": {"usd": "0.05", "eur": "0.05"}, "full_art": False}, "path"
+            return None, None
+
+        mock_cache.side_effect = cache_lookup
+
+        logger = logging.getLogger("Test")
+        logger.setLevel(logging.ERROR)
+
+        try:
+            counts, swaps, binders = assign_cards_to_binders(
+                input_csv=temp_input,
+                alkoo_inventory_csv=TEST_ALKOO,
+                pleather_inventory_csv=TEST_PLEATHER,
+                output_dir=TEST_OUTPUT_DIR,
+                logger=logger
+            )
+            
+            # Since Forest is a basic land, both copies should be retained!
+            # The non-foil Forest goes to "Binder - Basics"
+            # The foil Forest goes to "Binder - Fancy Basics"
+            # The Island goes to "Binder - Basics"
+            # None should be in "Binder - Duplicates and Unwanted"
+            basics_names = [r["Name"] for r in binders["Binder - Basics"]]
+            fancy_basics_names = [r["Name"] for r in binders["Binder - Fancy Basics"]]
+            duplicate_names = [r["Name"] for r in binders["Binder - Duplicates and Unwanted"]]
+
+            self.assertEqual(basics_names.count("Forest"), 1)
+            self.assertEqual(fancy_basics_names.count("Forest"), 1)
+            self.assertEqual(basics_names.count("Island"), 1)
+            self.assertEqual(len(duplicate_names), 0)
+
+        finally:
+            if temp_input.exists():
+                temp_input.unlink()
+
+
+class TestSeparatePoolDeduplication(unittest.TestCase):
+    @patch('_core_tools.scryfall_core.load_from_cache')
+    @patch('_core_tools.scryfall_core.resolve_cards')
+    def test_separate_pool_deduplication(self, mock_resolve, mock_cache):
+        temp_input = Path(__file__).parent / "temp_pool_test.csv"
+        csv_content = (
+            '"Count","Name","Edition","Condition","Language","Foil","Collector Number","Alter","Proxy","Purchase Price"\n'
+            '"1","Kitesail","MOM","Near Mint","English","foil","100","","",""\n'
+            '"1","Kitesail","MOM","Near Mint","English","","100","","",""\n'
+            '"1","Kitesail","WWK","Near Mint","English","","200","","",""\n'
+        )
+        with open(temp_input, 'w', encoding='utf-8') as f:
+            f.write(csv_content)
+
+        def cache_lookup(query):
+            name = query["name"]
+            # Both MOM and WWK versions are cheap creatures (non-land, non-basic)
+            return {
+                "name": name,
+                "type_line": "Artifact — Equipment",
+                "prices": {"usd": "0.10", "eur": "0.10"},
+                "full_art": False
+            }, "path"
+
+        mock_cache.side_effect = cache_lookup
+
+        logger = logging.getLogger("Test")
+        logger.setLevel(logging.ERROR)
+
+        try:
+            counts, swaps, binders = assign_cards_to_binders(
+                input_csv=temp_input,
+                alkoo_inventory_csv=TEST_ALKOO,
+                pleather_inventory_csv=TEST_PLEATHER,
+                output_dir=TEST_OUTPUT_DIR,
+                logger=logger,
+                alkoo_sets={"MOM"}
+            )
+            
+            # Foil MOM Kitesail should go to ALKOO Case
+            # Non-foil MOM Kitesail should go to Duplicates/Unwanted
+            # WWK Kitesail should go to Small Pleather
+            alkoo_names = [r["Name"] for r in binders["Binder - ALKOO Case"]]
+            pleather_names = [r["Name"] for r in binders["ABinder - Small Pleather"]]
+            duplicate_names = [r["Name"] for r in binders["Binder - Duplicates and Unwanted"]]
+
+            self.assertEqual(alkoo_names.count("Kitesail"), 1)
+            self.assertEqual(pleather_names.count("Kitesail"), 1)
+            self.assertEqual(duplicate_names.count("Kitesail"), 1)
+
+            # Check that the foil version went to ALKOO Case
+            foil_statuses = [is_foil(r) for r in binders["Binder - ALKOO Case"] if r["Name"] == "Kitesail"]
+            self.assertTrue(foil_statuses[0])
+
+        finally:
+            if temp_input.exists():
+                temp_input.unlink()
+
+
+class TestAlkooSorting(unittest.TestCase):
+    @patch('_core_tools.scryfall_core.load_from_cache')
+    @patch('_core_tools.scryfall_core.resolve_cards')
+    def test_alkoo_sorting_by_set_then_wubrg(self, mock_resolve, mock_cache):
+        temp_input = Path(__file__).parent / "temp_alkoo_sort_test.csv"
+        csv_content = (
+            '"Count","Name","Edition","Condition","Language","Foil","Collector Number","Alter","Proxy","Purchase Price"\n'
+            '"1","Wary Thespian","MOM","Near Mint","English","","215","","",""\n'
+            '"1","Dreg Recycler","MOM","Near Mint","English","","100","","",""\n'
+            '"1","Blue Spell","BLB","Near Mint","English","","10","","",""\n'
+            '"1","White Spell","BLB","Near Mint","English","","20","","",""\n'
+        )
+        with open(temp_input, 'w', encoding='utf-8') as f:
+            f.write(csv_content)
+
+        def cache_lookup(query):
+            name = query["name"]
+            if name == "Wary Thespian":
+                return {"name": "Wary Thespian", "type_line": "Creature", "prices": {"usd": "0.10", "eur": "0.10"}, "full_art": False, "color_identity": ["G"]}, "path"
+            elif name == "Dreg Recycler":
+                return {"name": "Dreg Recycler", "type_line": "Creature", "prices": {"usd": "0.10", "eur": "0.10"}, "full_art": False, "color_identity": ["B"]}, "path"
+            elif name == "Blue Spell":
+                return {"name": "Blue Spell", "type_line": "Instant", "prices": {"usd": "0.10", "eur": "0.10"}, "full_art": False, "color_identity": ["U"]}, "path"
+            elif name == "White Spell":
+                return {"name": "White Spell", "type_line": "Sorcery", "prices": {"usd": "0.10", "eur": "0.10"}, "full_art": False, "color_identity": ["W"]}, "path"
+            return None, None
+
+        mock_cache.side_effect = cache_lookup
+
+        logger = logging.getLogger("Test")
+        logger.setLevel(logging.ERROR)
+
+        try:
+            counts, swaps, binders = assign_cards_to_binders(
+                input_csv=temp_input,
+                alkoo_inventory_csv=TEST_ALKOO,
+                pleather_inventory_csv=TEST_PLEATHER,
+                output_dir=TEST_OUTPUT_DIR,
+                logger=logger,
+                alkoo_sets={"BLB", "MOM"}
+            )
+            
+            alkoo_cards = binders["Binder - ALKOO Case"]
+            names = [r["Name"] for r in alkoo_cards]
+            
+            # Expected order:
+            # BLB (White -> Blue) -> MOM (Black -> Green)
+            expected = ["White Spell", "Blue Spell", "Dreg Recycler", "Wary Thespian"]
+            self.assertEqual(names, expected)
+
+        finally:
+            if temp_input.exists():
+                temp_input.unlink()
+
+
+class TestPleatherNameOnlyDeduplication(unittest.TestCase):
+    @patch('_core_tools.scryfall_core.load_from_cache')
+    @patch('_core_tools.scryfall_core.resolve_cards')
+    def test_pleather_name_only_deduplication(self, mock_resolve, mock_cache):
+        temp_input = Path(__file__).parent / "temp_pleather_name_test.csv"
+        csv_content = (
+            '"Count","Name","Edition","Condition","Language","Foil","Collector Number","Alter","Proxy","Purchase Price"\n'
+            '"1","Quench","RNA","Near Mint","English","","100","","",""\n'
+            '"1","Quench","RVR","Near Mint","English","","200","","",""\n'
+        )
+        with open(temp_input, 'w', encoding='utf-8') as f:
+            f.write(csv_content)
+
+        # RVR Quench is foil, so RVR is fancier (score 100) than RNA (score 0)
+        # Note: both are in Pleather since RVR/RNA are not in alkoo_sets.
+        def cache_lookup(query):
+            name = query["name"]
+            return {
+                "name": name,
+                "type_line": "Instant",
+                "prices": {"usd": "0.10", "eur": "0.10"},
+                "full_art": False
+            }, "path"
+
+        mock_cache.side_effect = cache_lookup
+
+        logger = logging.getLogger("Test")
+        logger.setLevel(logging.ERROR)
+
+        try:
+            # RVR is foil in our test inputs (simulate foil upgrade check)
+            # In test_input_cards.csv or manually we can make one of them foil or higher score.
+            # RVR has foil, RNA doesn't. We simulate that by reading the CSV rows.
+            # RVR is row 2, let's make it foil in csv_content:
+            pass
+        except Exception:
+            pass
+
+        # Let's adjust csv_content so RVR has foil
+        csv_content = (
+            '"Count","Name","Edition","Condition","Language","Foil","Collector Number","Alter","Proxy","Purchase Price"\n'
+            '"1","Quench","RNA","Near Mint","English","","100","","",""\n'
+            '"1","Quench","RVR","Near Mint","English","foil","200","","",""\n'
+        )
+        with open(temp_input, 'w', encoding='utf-8') as f:
+            f.write(csv_content)
+
+        try:
+            counts, swaps, binders = assign_cards_to_binders(
+                input_csv=temp_input,
+                alkoo_inventory_csv=TEST_ALKOO,
+                pleather_inventory_csv=TEST_PLEATHER,
+                output_dir=TEST_OUTPUT_DIR,
+                logger=logger,
+                alkoo_sets=set()  # No ALKOO sets, so both are Pleather candidates
+            )
+            
+            pleather_names = [r["Name"] for r in binders["ABinder - Small Pleather"]]
+            duplicate_names = [r["Name"] for r in binders["Binder - Duplicates and Unwanted"]]
+
+            # Since duplicate checking for Pleather is name-only, the two copies of Quench
+            # should be deduplicated down to 1.
+            # Specifically, the fancier RVR (foil) should be kept, and the RNA one should be sent to duplicates.
+            self.assertEqual(pleather_names.count("Quench"), 1)
+            self.assertEqual(duplicate_names.count("Quench"), 1)
+
+            # The retained one should be the RVR version (foil)
+            retained_editions = [r["Edition"] for r in binders["ABinder - Small Pleather"] if r["Name"] == "Quench"]
+            self.assertEqual(retained_editions[0], "RVR")
+
+        finally:
+            if temp_input.exists():
+                temp_input.unlink()
 
 
 if __name__ == "__main__":

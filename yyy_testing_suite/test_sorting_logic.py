@@ -79,5 +79,35 @@ class TestSortingLogic(unittest.TestCase):
         self.assertEqual(sorted_names[3], "Plains")
         self.assertEqual(sorted_names[4], "Forest")
 
+    def test_colored_artifacts_sorting(self):
+        # Dreg Recycler is a black artifact creature (colors: ['B'])
+        # Sol Ring is a colorless artifact (colors: [])
+        # Twin-Silk Spider is a green creature (colors: ['G'])
+        cards = [
+            {"name": "Twin-Silk Spider", "type": "Creature — Spider", "colors": ['G']},
+            {"name": "Dreg Recycler", "type": "Artifact Creature — Zombie", "colors": ['B']},
+            {"name": "Sol Ring", "type": "Artifact", "colors": []}
+        ]
+        
+        sorted_cards = sorted(cards, key=lambda c: get_card_wubrg_sort_key(c["name"], c["type"], c["colors"]))
+        sorted_names = [c["name"] for c in sorted_cards]
+        
+        # Expected WUBRG order for non-lands: Black (B) -> Green (G) -> Colorless (C)
+        self.assertEqual(sorted_names, ["Dreg Recycler", "Twin-Silk Spider", "Sol Ring"])
+
+    def test_sorting_ignores_hyphens(self):
+        # Without ignoring hyphens: Blade-Tribe Berserkers (B-l-a-d-e--...) comes before Bladeback Sliver (B-l-a-d-e-b-...)
+        # With ignoring hyphens: Bladeback Sliver (bladeback) comes before Blade-Tribe Berserkers (bladetribe)
+        cards = [
+            {"name": "Blade-Tribe Berserkers", "type": "Creature — Human Berserker", "colors": ['R']},
+            {"name": "Bladeback Sliver", "type": "Creature — Sliver", "colors": ['R']},
+            {"name": "Alania's Pathmaker", "type": "Creature — Otter Knight", "colors": ['R']}
+        ]
+        sorted_cards = sorted(cards, key=lambda c: get_card_wubrg_sort_key(c["name"], c["type"], c["colors"]))
+        sorted_names = [c["name"] for c in sorted_cards]
+        
+        expected = ["Alania's Pathmaker", "Bladeback Sliver", "Blade-Tribe Berserkers"]
+        self.assertEqual(sorted_names, expected)
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,8 +40,14 @@ When creating or modifying scripts in this workspace, follow these rules:
 - **Handling API / Caching**:
   - Integrate with `scryfall_core` caching routines rather than writing custom HTTP fetch/cache handlers from scratch.
   - Handle rate limiting (`time.sleep(0.3)`) and TLS certificate bypass (`trust_env = False` on requests session) as specified in the API guidelines.
-- **Decoupled Architecture**:
-  - Separate parsing logic, file I/O, and front-end interface wrappers (CLI / GUI / Web) into clean files.
+- **Decoupled Architecture & Naming Conventions**:
+  - Separate parsing logic, file I/O, and front-end interface wrappers (CLI / GUI) into clean files.
+  - Follow the workspace-wide naming scheme for files in each tool directory `<feature_name>`:
+    - **Logic module**: `<feature_name>_logic.py` (contains the core processing engine).
+    - **CLI wrapper**: `<feature_name>_cli.py` (accepts arguments and runs from CLI).
+    - **GUI wrapper**: `<feature_name>_gui.py` (contains native Tkinter interface).
+  - Use spelling style consistent with the folder name (e.g., British English `analyser` rather than `analyzer`, `colour` rather than `color`).
+  - Output directories for generated summaries or artifacts should be named `outputs/` instead of `output/`.
 - **Documentation**:
   - Every project/tool directory must contain a folder-specific `README.md` explaining the purpose, script usage, configuration parameters, and inputs/outputs.
 

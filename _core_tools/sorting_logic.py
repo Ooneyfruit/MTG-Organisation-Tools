@@ -31,16 +31,18 @@ def get_land_sort_key(color_list: List[str], card_name: str) -> Tuple[int, str, 
     ranks = sorted([color_map[c] for c in color_list if c in color_map])
     length = len(ranks)
     
+    clean_name = card_name.lower().replace("-", "")
+    
     if length == 2:
         sorted_letters = tuple(sorted([c for c in color_list if c in color_map]))
         guild_name = GUILD_MAP.get(sorted_letters, '')
-        return (2, guild_name.lower(), card_name.lower())
+        return (2, guild_name.lower(), clean_name)
     elif length == 1:
-        return (1, str(ranks[0]), card_name.lower())
+        return (1, str(ranks[0]), clean_name)
     elif length == 0:
-        return (0, '', card_name.lower())
+        return (0, '', clean_name)
     else:
-        return (length, '', card_name.lower())
+        return (length, '', clean_name)
 
 def get_card_wubrg_sort_key(name: str, type_line: str, color_identity: List[str]) -> Tuple[int, tuple, str]:
     """
@@ -53,10 +55,12 @@ def get_card_wubrg_sort_key(name: str, type_line: str, color_identity: List[str]
     is_land = "land" in type_line.lower()
     is_basic = "basic" in type_line.lower() and is_land
     
+    clean_name = name.lower().replace("-", "")
+    
     if is_basic:
-        return (2, get_land_sort_key(color_identity, name), name.lower())
+        return (2, get_land_sort_key(color_identity, name), clean_name)
     elif is_land:
-        return (1, get_land_sort_key(color_identity, name), name.lower())
+        return (1, get_land_sort_key(color_identity, name), clean_name)
     else:
         # We wrap get_non_land_wubrg_key to match tuple comparison depth
-        return (0, get_non_land_wubrg_key(color_identity), name.lower())
+        return (0, get_non_land_wubrg_key(color_identity), clean_name)

@@ -101,9 +101,8 @@ def main():
                 for key in ordered_keys:
                     name, edition, cn, foil, cond = key
                     count = tallied[key]
-                    details = f"{name} (Edition: {edition}, CN: {cn}, Foil: {foil}, Condition: {cond})"
-                    qty_str = f" [{count}x]"
-                    logger.info(f"   - {details}{qty_str}")
+                    details = f"{count}x {name} (Edition: {edition}, CN: {cn}, Foil: {foil}, Condition: {cond})"
+                    logger.info(f"   - {details}")
             else:
                 logger.info("   (Empty)")
                 

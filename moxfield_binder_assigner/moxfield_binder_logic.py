@@ -93,15 +93,50 @@ def parse_price(val) -> float:
     except ValueError:
         return 0.0
 
+def is_basic_land_name(name: str) -> bool:
+    """Checks if the card name corresponds to a basic land (including snow-covered)."""
+    n_lower = name.strip().lower()
+    basics = {
+        "forest", "island", "mountain", "plains", "swamp", "wastes",
+        "snow-covered forest", "snow-covered island", "snow-covered mountain", 
+        "snow-covered plains", "snow-covered swamp"
+    }
+    return n_lower in basics
+
 def is_basic_land(type_line: str) -> bool:
     """Checks if the card is a basic land."""
     t_lower = type_line.lower()
     return "basic" in t_lower and "land" in t_lower
 
-def load_existing_inventory(csv_path: Path) -> Dict[str, Dict[str, bool]]:
+def get_fanciness_score(row: Dict, scry_data: Optional[Dict]) -> float:
+    """Computes a numeric score indicating how 'fancy' a card printing is."""
+    score = 0.0
+    if is_foil(row):
+        score += 100.0
+    if scry_data:
+        if scry_data.get("full_art"):
+            score += 20.0
+        if scry_data.get("border_color") == "borderless":
+            score += 15.0
+        
+        # Each frame effect adds 10 points
+        frame_effects = scry_data.get("frame_effects", [])
+        if isinstance(frame_effects, list):
+            score += len(frame_effects) * 10.0
+            
+        # Each promo type adds 10 points
+        promo_types = scry_data.get("promo_types", [])
+        if isinstance(promo_types, list):
+            score += len(promo_types) * 10.0
+            
+        if scry_data.get("promo"):
+            score += 5.0
+    return score
+
+def load_existing_inventory(csv_path: Path) -> Dict[str, List[Dict]]:
     """
-    Loads cards from an existing collection CSV to track presence of foils vs non-foils.
-    Returns dict: {card_name.lower(): {"has_foil": bool, "has_non_foil": bool}}
+    Loads cards from an existing collection CSV.
+    Returns dict: {card_name.lower(): [list of card rows]}
     """
     inventory = {}
     if not csv_path or not csv_path.exists():
@@ -113,15 +148,7 @@ def load_existing_inventory(csv_path: Path) -> Dict[str, Dict[str, bool]]:
             if 'Name' not in row:
                 continue
             name_key = row['Name'].strip().lower()
-            foil_status = is_foil(row)
-            
-            if name_key not in inventory:
-                inventory[name_key] = {"has_foil": False, "has_non_foil": False}
-                
-            if foil_status:
-                inventory[name_key]["has_foil"] = True
-            else:
-                inventory[name_key]["has_non_foil"] = True
+            inventory.setdefault(name_key, []).append(row)
     return inventory
 
 def assign_cards_to_binders(
@@ -166,43 +193,124 @@ def assign_cards_to_binders(
 
     logger.info(f"Read {len(incoming_rows)} rows from incoming CSV.")
 
+    # Gather all queries from incoming cards AND relevant matching inventory cards to resolve in one batch
+    scryfall_queries = []
+    seen_queries = set()
+
+    def add_query(row_data):
+        name = row_data.get("Name", "").strip()
+        edition = row_data.get("Edition", "").strip()
+        cn = row_data.get("Collector Number", "").strip()
+        key = (name.lower(), edition.lower(), cn.lower())
+        if key not in seen_queries:
+            seen_queries.add(key)
+            scryfall_queries.append({
+                "name": name,
+                "set": edition,
+                "collector_number": cn
+            })
+
+    for row in incoming_rows:
+        add_query(row)
+        name_key = row.get("Name", "").strip().lower()
+        # Also query any inventory cards that have the same name, so we can compare their aesthetics
+        if name_key in alkoo_inv:
+            for inv_row in alkoo_inv[name_key]:
+                add_query(inv_row)
+        if name_key in pleather_inv:
+            for inv_row in pleather_inv[name_key]:
+                add_query(inv_row)
+
+    logger.info(f"Resolving {len(scryfall_queries)} unique card details against Scryfall...")
+    scryfall_core.resolve_cards(scryfall_queries)
+
     # --- Internal Input Deduplication ---
     logger.info("Detecting duplicates within incoming cards list...")
-    grouped_incoming: Dict[str, List[Dict]] = {}
+    
+    yellow_and_basics = []
+    alkoo_candidates = []
+    pleather_candidates = []
+    
     for row in incoming_rows:
-        name_key = row["Name"].strip().lower()
-        grouped_incoming.setdefault(name_key, []).append(row)
+        name = row["Name"].strip()
+        if is_basic_land_name(name):
+            yellow_and_basics.append(row)
+            continue
+            
+        set_code = row.get("Edition", "").strip().upper()
+        query_card = {
+            "name": name,
+            "set": row.get("Edition", "").strip(),
+            "collector_number": row.get("Collector Number", "").strip()
+        }
+        scry_data, _ = scryfall_core.load_from_cache(query_card)
+        if not scry_data:
+            scry_data = {}
+            
+        type_line = scry_data.get("type_line", "")
+        prices = scry_data.get("prices", {})
+        usd = parse_price(prices.get("usd"))
+        eur = parse_price(prices.get("eur"))
+        card_is_basic = is_basic_land(type_line)
+        card_is_land = "land" in type_line.lower()
+        
+        # Rule 1 Check: Worth > $1.00 USD and/or > €1.00 EUR (except basic lands)
+        if (usd > 1.0 or eur > 1.0) and not card_is_basic:
+            yellow_and_basics.append(row)
+        # Basic land (Rule 3)
+        elif card_is_basic:
+            yellow_and_basics.append(row)
+        # Rule 2 Check: Non-land in ALKOO Set Codes
+        elif not card_is_land and set_code in alkoo_sets:
+            alkoo_candidates.append(row)
+        else:
+            pleather_candidates.append(row)
 
     best_incoming: List[Dict] = []
     internal_duplicates: List[Dict] = []
+    
+    # Yellow and basics are added directly
+    best_incoming.extend(yellow_and_basics)
 
-    for name_key, rows in grouped_incoming.items():
-        # Sort so foil is first (prioritizing foil)
-        sorted_rows = sorted(rows, key=lambda r: is_foil(r), reverse=True)
-        best_row = sorted_rows[0]
-        best_incoming.append(best_row)
-        
-        # Remaining entries for the same card name are duplicates
-        for extra_row in sorted_rows[1:]:
-            internal_duplicates.append(extra_row)
-            logger.info(
-                f"[Internal Duplicate] '{extra_row['Name']}' (Foil: {is_foil(extra_row)}) "
-                f"routed directly to Duplicates/Unwanted (Best version '{best_row['Name']}' Foil: {is_foil(best_row)} retained)"
-            )
+    def get_row_score(r):
+        query_card = {
+            "name": r.get("Name", "").strip(),
+            "set": r.get("Edition", "").strip(),
+            "collector_number": r.get("Collector Number", "").strip()
+        }
+        scry_data, _ = scryfall_core.load_from_cache(query_card)
+        return get_fanciness_score(r, scry_data)
+
+    def deduplicate_pool(pool, pool_name, group_by_set=False):
+        if group_by_set:
+            grouped: Dict[Tuple[str, str], List[Dict]] = {}
+            for r in pool:
+                name_key = r["Name"].strip().lower()
+                set_key = r.get("Edition", "").strip().lower()
+                grouped.setdefault((name_key, set_key), []).append(r)
+        else:
+            grouped_by_name: Dict[str, List[Dict]] = {}
+            for r in pool:
+                name_key = r["Name"].strip().lower()
+                grouped_by_name.setdefault(name_key, []).append(r)
+            grouped = {(name, ""): rows for name, rows in grouped_by_name.items()}
+            
+        for (name_key, set_key), rows in grouped.items():
+            sorted_rows = sorted(rows, key=get_row_score, reverse=True)
+            best_row = sorted_rows[0]
+            best_incoming.append(best_row)
+            
+            for extra_row in sorted_rows[1:]:
+                internal_duplicates.append(extra_row)
+                logger.info(
+                    f"[Internal {pool_name} Duplicate] '{extra_row['Name']}' ({extra_row.get('Edition', '')}) (Score: {get_row_score(extra_row):.1f}) "
+                    f"routed directly to Duplicates/Unwanted (Best version '{best_row['Name']}' ({best_row.get('Edition', '')}) Score: {get_row_score(best_row):.1f} retained)"
+                )
+
+    deduplicate_pool(alkoo_candidates, "ALKOO", group_by_set=True)
+    deduplicate_pool(pleather_candidates, "Pleather", group_by_set=False)
 
     logger.info(f"Selected {len(best_incoming)} unique best card(s). Identified {len(internal_duplicates)} duplicate(s) within the input.")
-
-    # Resolve details against Scryfall cache/API in batch
-    scryfall_queries = []
-    for row in best_incoming:
-        scryfall_queries.append({
-            "name": row.get("Name", "").strip(),
-            "set": row.get("Edition", "").strip(),
-            "collector_number": row.get("Collector Number", "").strip()
-        })
-        
-    logger.info("Resolving card details (prices, type_line, full_art) against Scryfall...")
-    scryfall_core.resolve_cards(scryfall_queries)
 
     # Binder Categories lists
     binders: Dict[str, List[Dict]] = {
@@ -237,7 +345,11 @@ def assign_cards_to_binders(
                 "name": name,
                 "type_line": "",
                 "prices": {},
-                "full_art": False
+                "full_art": False,
+                "frame_effects": [],
+                "promo_types": [],
+                "promo": False,
+                "border_color": "black"
             }
 
         type_line = scry_data.get("type_line", "")
@@ -248,6 +360,8 @@ def assign_cards_to_binders(
         eur = parse_price(prices.get("eur"))
         card_is_basic = is_basic_land(type_line)
 
+        incoming_fanciness = get_fanciness_score(row, scry_data)
+
         # Rule 1: Worth > $1.00 USD and/or > €1.00 EUR (except basic lands). Ignores dupes.
         if (usd > 1.0 or eur > 1.0) and not card_is_basic:
             binders["Binder - Yellow"].append(row)
@@ -257,15 +371,40 @@ def assign_cards_to_binders(
         # Rule 2: Non-land in ALKOO Set Codes
         card_is_land = "land" in type_line.lower()
         if not card_is_land and set_code in alkoo_sets:
+            existing_same_set = []
             if name_key in alkoo_inv:
-                has_foil_existing = alkoo_inv[name_key]["has_foil"]
-                if not has_foil_existing and card_is_foil:
+                for inv_row in alkoo_inv[name_key]:
+                    if inv_row.get("Edition", "").strip().upper() == set_code:
+                        existing_same_set.append(inv_row)
+                        
+            if existing_same_set:
+                # Find maximum fanciness score in existing ALKOO inventory for this card name and set
+                max_existing_score = -1.0
+                best_existing_row = None
+                for inv_row in existing_same_set:
+                    inv_query = {
+                        "name": inv_row.get("Name", "").strip(),
+                        "set": inv_row.get("Edition", "").strip(),
+                        "collector_number": inv_row.get("Collector Number", "").strip()
+                    }
+                    inv_scry, _ = scryfall_core.load_from_cache(inv_query)
+                    score = get_fanciness_score(inv_row, inv_scry)
+                    if score > max_existing_score:
+                        max_existing_score = score
+                        best_existing_row = inv_row
+ 
+                if incoming_fanciness > max_existing_score:
                     binders["Binder - ALKOO Case"].append(row)
-                    swap_notes.append(f"ALKOO Case: Swap out non-foil '{name}' with incoming foil")
-                    logger.info(f"[Rule 2] Assigned '{name}' to ALKOO Case as Foil Upgrade (Set: {set_code})")
+                    f_desc_incoming = "foil" if card_is_foil else "non-foil"
+                    f_desc_existing = "foil" if is_foil(best_existing_row) else "non-foil"
+                    swap_notes.append(
+                        f"ALKOO Case: Swap out existing {f_desc_existing} version of '{name}' ({set_code}) (Score: {max_existing_score:.1f}) "
+                        f"with incoming fancier {f_desc_incoming} version (Score: {incoming_fanciness:.1f})"
+                    )
+                    logger.info(f"[Rule 2] Assigned '{name}' to ALKOO Case as Fanciness Upgrade (Set: {set_code})")
                 else:
                     binders["Binder - Duplicates and Unwanted"].append(row)
-                    logger.info(f"[Rule 2] Routed '{name}' to Duplicates and Unwanted (Already exists in ALKOO Case)")
+                    logger.info(f"[Rule 2] Routed '{name}' to Duplicates and Unwanted (Already exists in ALKOO Case with equal/better fanciness for set {set_code})")
             else:
                 binders["Binder - ALKOO Case"].append(row)
                 logger.info(f"[Rule 2] Assigned '{name}' to ALKOO Case (New card, Set: {set_code})")
@@ -284,14 +423,33 @@ def assign_cards_to_binders(
 
         # Rule 4: Small Pleather check
         if name_key in pleather_inv:
-            has_foil_existing = pleather_inv[name_key]["has_foil"]
-            if not has_foil_existing and card_is_foil:
+            # Find maximum fanciness score in existing Pleather inventory for this card name
+            max_existing_score = -1.0
+            best_existing_row = None
+            for inv_row in pleather_inv[name_key]:
+                inv_query = {
+                    "name": inv_row.get("Name", "").strip(),
+                    "set": inv_row.get("Edition", "").strip(),
+                    "collector_number": inv_row.get("Collector Number", "").strip()
+                }
+                inv_scry, _ = scryfall_core.load_from_cache(inv_query)
+                score = get_fanciness_score(inv_row, inv_scry)
+                if score > max_existing_score:
+                    max_existing_score = score
+                    best_existing_row = inv_row
+
+            if incoming_fanciness > max_existing_score:
                 binders["ABinder - Small Pleather"].append(row)
-                swap_notes.append(f"Small Pleather: Swap out non-foil '{name}' with incoming foil")
-                logger.info(f"[Rule 4] Assigned '{name}' to Small Pleather as Foil Upgrade")
+                f_desc_incoming = "foil" if card_is_foil else "non-foil"
+                f_desc_existing = "foil" if is_foil(best_existing_row) else "non-foil"
+                swap_notes.append(
+                    f"Small Pleather: Swap out existing {f_desc_existing} version of '{name}' (Score: {max_existing_score:.1f}) "
+                    f"with incoming fancier {f_desc_incoming} version (Score: {incoming_fanciness:.1f})"
+                )
+                logger.info(f"[Rule 4] Assigned '{name}' to Small Pleather as Fanciness Upgrade")
             else:
                 binders["Binder - Duplicates and Unwanted"].append(row)
-                logger.info(f"[Rule 4] Routed '{name}' to Duplicates and Unwanted (Already exists in Small Pleather)")
+                logger.info(f"[Rule 4] Routed '{name}' to Duplicates and Unwanted (Already exists in Small Pleather with equal/better fanciness)")
         else:
             binders["ABinder - Small Pleather"].append(row)
             logger.info(f"[Rule 4] Assigned '{name}' to Small Pleather (New card)")
@@ -312,7 +470,12 @@ def assign_cards_to_binders(
             else:
                 type_line = ""
                 color_identity = []
-            return get_card_wubrg_sort_key(name, type_line, color_identity)
+            
+            wubrg_key = get_card_wubrg_sort_key(name, type_line, color_identity)
+            if binder_name == "Binder - ALKOO Case":
+                set_code = row.get("Edition", "").strip().upper()
+                return (set_code, wubrg_key)
+            return wubrg_key
             
         card_rows.sort(key=sort_key_fn)
 
