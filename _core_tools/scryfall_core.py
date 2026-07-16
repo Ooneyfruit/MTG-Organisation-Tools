@@ -85,6 +85,20 @@ def load_from_cache(card_parsed):
                             # Out of date cache schema; return None to trigger fresh fetch
                             continue
                         
+                        # Check cache age (volatile info like price should be refreshed if older than 2 weeks)
+                        queried_at_str = data.get("query_metadata", {}).get("queried_at")
+                        if queried_at_str:
+                            if queried_at_str.endswith('Z'):
+                                queried_at_str = queried_at_str[:-1] + '+00:00'
+                            try:
+                                queried_at_dt = datetime.datetime.fromisoformat(queried_at_str)
+                                now = datetime.datetime.now(datetime.timezone.utc)
+                                if (now - queried_at_dt).days >= 14:
+                                    # Cache is older than two weeks; bust it to recheck
+                                    continue
+                            except Exception:
+                                pass
+                        
                         # Validate that the cached name matches the requested name (if provided)
                         query_name = card_parsed.get("name")
                         scry_name = scry_data.get("name")

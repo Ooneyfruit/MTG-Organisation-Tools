@@ -1,0 +1,9 @@
+{
+  "yellow_path": "C:/Users/dougl/Documents/Code/_MTG/moxfield_yellow_binder_checker/input/YELLOWmoxfield_haves_2026-07-16-1534Z.csv",
+  "other_paths": [
+    "C:\\Users\\dougl\\Documents\\Code\\_MTG\\moxfield_yellow_binder_checker\\input\\alkoomoxfield_haves_2026-07-16-1533Z.csv",
+    "C:\\Users\\dougl\\Documents\\Code\\_MTG\\moxfield_yellow_binder_checker\\input\\lgplmoxfield_haves_2026-07-16-1534Z.csv",
+    "C:\\Users\\dougl\\Documents\\Code\\_MTG\\moxfield_yellow_binder_checker\\input\\smplmoxfield_haves_2026-07-16-1534Z.acsv.csv"
+  ],
+  "output_dir": "C:\\Users\\dougl\\Documents\\Code\\_MTG\\moxfield_yellow_binder_checker\\outputs"
+}

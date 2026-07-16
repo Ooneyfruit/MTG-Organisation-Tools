@@ -155,5 +155,60 @@ class TestScryfallCore(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_cache_age_busting(self):
+        card = {
+            "name": "Aging Card",
+            "set": "AGE",
+            "collector_number": "10"
+        }
+        paths = get_cache_paths(card)
+        filepath = os.path.join(CACHE_DIR, paths[0][0])
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        # 1. Test fresh cache (e.g. queried just now)
+        import datetime
+        now_str = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        payload = {
+            "query_metadata": {
+                "query_type": "scryfall_card_by_set_and_collector_number",
+                "queried_at": now_str
+            },
+            "scryfall_data": {
+                "name": "Aging Card",
+                "color_identity": ["G"],
+                "type_line": "Instant",
+                "prices": {"usd": "1.00"},
+                "full_art": False,
+                "frame_effects": [],
+                "promo_types": [],
+                "promo": False
+            }
+        }
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(payload, f)
+            
+        data, path = load_from_cache(card)
+        self.assertIsNotNone(data)
+        self.assertEqual(data["name"], "Aging Card")
+        
+        # 2. Test stale cache (e.g. 15 days ago)
+        fifteen_days_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=15)
+        stale_str = fifteen_days_ago.isoformat().replace("+00:00", "Z")
+        payload["query_metadata"]["queried_at"] = stale_str
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(payload, f)
+            
+        data, path = load_from_cache(card)
+        # Should be None due to being older than 14 days
+        self.assertIsNone(data)
+        
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            try:
+                os.rmdir(os.path.dirname(filepath))
+            except Exception:
+                pass
+
 if __name__ == "__main__":
     unittest.main()

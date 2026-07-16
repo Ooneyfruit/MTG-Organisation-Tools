@@ -14,6 +14,7 @@ if str(PARENT_DIR) not in sys.path:
 
 from _core_tools import scryfall_core
 from _core_tools.sorting_logic import get_card_wubrg_sort_key
+from _core_tools.yellow_binder_logic import get_card_prices, meets_threshold, USD_TO_GBP, EUR_TO_GBP
 
 # --- Set Codes for ALKOO Case ---
 DEFAULT_ALKOO_SETS = {
@@ -248,14 +249,18 @@ def assign_cards_to_binders(
             scry_data = {}
             
         type_line = scry_data.get("type_line", "")
-        prices = scry_data.get("prices", {})
-        usd = parse_price(prices.get("usd"))
-        eur = parse_price(prices.get("eur"))
         card_is_basic = is_basic_land(type_line)
         card_is_land = "land" in type_line.lower()
-        
-        # Rule 1 Check: Worth > $1.00 USD and/or > €1.00 EUR (except basic lands)
-        if (usd > 1.0 or eur > 1.0) and not card_is_basic:
+
+        if scry_data:
+            usd, eur, gbp = get_card_prices(scry_data, is_foil(row))
+        else:
+            usd, eur, gbp = 0.0, 0.0, 0.0
+
+        is_glitch = (usd <= 0.0 and eur <= 0.0) if scry_data else True
+
+        # Rule 1 Check: Yellow Binder Threshold (except basic lands)
+        if not card_is_basic and not is_glitch and meets_threshold(usd, eur, gbp, name):
             yellow_and_basics.append(row)
         # Basic land (Rule 3)
         elif card_is_basic:
@@ -354,18 +359,17 @@ def assign_cards_to_binders(
 
         type_line = scry_data.get("type_line", "")
         full_art = scry_data.get("full_art", False)
-        prices = scry_data.get("prices", {})
-        
-        usd = parse_price(prices.get("usd"))
-        eur = parse_price(prices.get("eur"))
         card_is_basic = is_basic_land(type_line)
+
+        usd, eur, gbp = get_card_prices(scry_data, is_foil(row))
+        is_glitch = (usd <= 0.0 and eur <= 0.0)
 
         incoming_fanciness = get_fanciness_score(row, scry_data)
 
-        # Rule 1: Worth > $1.00 USD and/or > €1.00 EUR (except basic lands). Ignores dupes.
-        if (usd > 1.0 or eur > 1.0) and not card_is_basic:
+        # Rule 1: Yellow Binder Threshold (except basic lands). Ignores dupes.
+        if not card_is_basic and not is_glitch and meets_threshold(usd, eur, gbp, name):
             binders["Binder - Yellow"].append(row)
-            logger.info(f"[Rule 1] Assigned '{name}' to Yellow Binder (Valued: ${usd:.2f} USD / €{eur:.2f} EUR)")
+            logger.info(f"[Rule 1] Assigned '{name}' to Yellow Binder (Valued: £{max(usd * USD_TO_GBP, eur * EUR_TO_GBP):.2f} GBP)")
             continue
 
         # Rule 2: Non-land in ALKOO Set Codes
