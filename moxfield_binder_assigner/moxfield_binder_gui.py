@@ -8,12 +8,21 @@ from pathlib import Path
 from typing import Optional
 
 # Import logic
-from moxfield_binder_logic import assign_cards_to_binders, is_foil, load_alkoo_sets, write_alkoo_sets
+from moxfield_binder_logic import (
+    assign_cards_to_binders,
+    is_foil,
+    load_alkoo_sets,
+    write_alkoo_sets,
+    load_largepleather_sets,
+    write_largepleather_sets
+)
 
 # --- Configurations ---
 SCRIPT_DIR = Path(__file__).parent
 ALKOO_FILE = SCRIPT_DIR / "alkoo.txt"
 ALKOO_BASE_FILE = SCRIPT_DIR / "alkoo_base.txt"
+LARGEPLEATHER_FILE = SCRIPT_DIR / "largepleather.txt"
+LARGEPLEATHER_BASE_FILE = SCRIPT_DIR / "largepleather_base.txt"
 INPUTS_DIR = SCRIPT_DIR / "inputs"
 LOGS_DIR = SCRIPT_DIR / "logs"
 
@@ -46,8 +55,9 @@ class MoxfieldBinderGui:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Moxfield Binder Assigner")
-        self.root.geometry("780x790")
-        self.last_saved_content = ""
+        self.root.geometry("800x950")
+        self.last_saved_alkoo = ""
+        self.last_saved_largepleather = ""
         
         self.logger = self.setup_logging()
 
@@ -118,12 +128,19 @@ class MoxfieldBinderGui:
         btn_browse_alkoo = tk.Button(files_frame, text="Browse...", command=self.browse_alkoo)
         btn_browse_alkoo.grid(row=1, column=2, padx=5, pady=5)
 
+        lbl_largepleather = tk.Label(files_frame, text="Existing Large Pleather CSV:")
+        lbl_largepleather.grid(row=2, column=0, sticky="w", pady=5)
+        self.ent_largepleather = tk.Entry(files_frame, width=65)
+        self.ent_largepleather.grid(row=2, column=1, padx=5, pady=5, sticky="we")
+        btn_browse_largepleather = tk.Button(files_frame, text="Browse...", command=self.browse_largepleather)
+        btn_browse_largepleather.grid(row=2, column=2, padx=5, pady=5)
+
         lbl_pleather = tk.Label(files_frame, text="Existing Small Pleather CSV:")
-        lbl_pleather.grid(row=2, column=0, sticky="w", pady=5)
+        lbl_pleather.grid(row=3, column=0, sticky="w", pady=5)
         self.ent_pleather = tk.Entry(files_frame, width=65)
-        self.ent_pleather.grid(row=2, column=1, padx=5, pady=5, sticky="we")
+        self.ent_pleather.grid(row=3, column=1, padx=5, pady=5, sticky="we")
         btn_browse_pleather = tk.Button(files_frame, text="Browse...", command=self.browse_pleather)
-        btn_browse_pleather.grid(row=2, column=2, padx=5, pady=5)
+        btn_browse_pleather.grid(row=3, column=2, padx=5, pady=5)
 
         files_frame.columnconfigure(1, weight=1)
 
@@ -149,11 +166,36 @@ class MoxfieldBinderGui:
         btn_load_sets = tk.Button(editor_btn_frame, text="Load alkoo.txt", command=self.load_alkoo_sets_from_file)
         btn_load_sets.pack(side="right", padx=5)
         
-        self.txt_alkoo_sets = scrolledtext.ScrolledText(alkoo_editor_frame, height=3, font=("Courier", 10))
+        self.txt_alkoo_sets = scrolledtext.ScrolledText(alkoo_editor_frame, height=2, font=("Courier", 10))
         self.txt_alkoo_sets.pack(fill="x", pady=2)
 
+        # --- Large Pleather Set Codes Editor ---
+        largepleather_editor_frame = tk.LabelFrame(root, text="Large Pleather Set Codes Configuration", font=("Arial", 9, "bold"), padx=10, pady=5)
+        largepleather_editor_frame.pack(fill="x", padx=15, pady=5)
+        
+        lp_editor_btn_frame = tk.Frame(largepleather_editor_frame)
+        lp_editor_btn_frame.pack(fill="x", pady=2)
+        
+        self.lbl_lp_editor_status = tk.Label(lp_editor_btn_frame, text="", fg="green", font=("Arial", 9))
+        self.lbl_lp_editor_status.pack(side="left")
+        
+        btn_lp_clear_sets = tk.Button(lp_editor_btn_frame, text="Clear", command=self.clear_largepleather_sets)
+        btn_lp_clear_sets.pack(side="right", padx=5)
+        
+        btn_lp_reset_sets = tk.Button(lp_editor_btn_frame, text="Reset to Default", command=self.reset_largepleather_sets)
+        btn_lp_reset_sets.pack(side="right", padx=5)
+        
+        btn_lp_save_sets = tk.Button(lp_editor_btn_frame, text="Save to largepleather.txt", command=self.save_largepleather_sets)
+        btn_lp_save_sets.pack(side="right", padx=5)
+        
+        btn_lp_load_sets = tk.Button(lp_editor_btn_frame, text="Load largepleather.txt", command=self.load_largepleather_sets_from_file)
+        btn_lp_load_sets.pack(side="right", padx=5)
+        
+        self.txt_largepleather_sets = scrolledtext.ScrolledText(largepleather_editor_frame, height=2, font=("Courier", 10))
+        self.txt_largepleather_sets.pack(fill="x", pady=2)
+
         act_frame = tk.Frame(root)
-        act_frame.pack(fill="x", padx=15, pady=10)
+        act_frame.pack(fill="x", padx=15, pady=5)
 
         self.btn_run = tk.Button(
             act_frame,
@@ -177,6 +219,7 @@ class MoxfieldBinderGui:
 
         self.prefill_fields()
         self.load_alkoo_sets_from_file()
+        self.load_largepleather_sets_from_file()
 
         # Register close handler
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -212,12 +255,15 @@ class MoxfieldBinderGui:
                     data = json.load(f)
                 input_csv = data.get("input_csv", "")
                 alkoo_csv = data.get("alkoo_csv", "")
+                largepleather_csv = data.get("largepleather_csv", "")
                 pleather_csv = data.get("pleather_csv", "")
                 
                 if input_csv:
                     self.ent_input.insert(0, input_csv)
                 if alkoo_csv:
                     self.ent_alkoo.insert(0, alkoo_csv)
+                if largepleather_csv:
+                    self.ent_largepleather.insert(0, largepleather_csv)
                 if pleather_csv:
                     self.ent_pleather.insert(0, pleather_csv)
                 loaded_last_used = True
@@ -230,6 +276,8 @@ class MoxfieldBinderGui:
                 self.ent_input.insert(0, str(DEFAULT_INPUT))
             if DEFAULT_ALKOO:
                 self.ent_alkoo.insert(0, str(DEFAULT_ALKOO))
+            if DEFAULT_LARGEPLEATHER:
+                self.ent_largepleather.insert(0, str(DEFAULT_LARGEPLEATHER))
             if DEFAULT_PLEATHER:
                 self.ent_pleather.insert(0, str(DEFAULT_PLEATHER))
             self.logger.info("Initialized file configuration fields with available test defaults.")
@@ -240,6 +288,7 @@ class MoxfieldBinderGui:
             data = {
                 "input_csv": self.ent_input.get().strip(),
                 "alkoo_csv": self.ent_alkoo.get().strip(),
+                "largepleather_csv": self.ent_largepleather.get().strip(),
                 "pleather_csv": self.ent_pleather.get().strip()
             }
             with open(config_path, "w", encoding="utf-8") as f:
@@ -266,6 +315,15 @@ class MoxfieldBinderGui:
             self.ent_alkoo.delete(0, tk.END)
             self.ent_alkoo.insert(0, filename)
 
+    def browse_largepleather(self):
+        filename = filedialog.askopenfilename(
+            title="Select Existing Large Pleather CSV",
+            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
+        )
+        if filename:
+            self.ent_largepleather.delete(0, tk.END)
+            self.ent_largepleather.insert(0, filename)
+
     def browse_pleather(self):
         filename = filedialog.askopenfilename(
             title="Select Existing Small Pleather CSV",
@@ -278,6 +336,7 @@ class MoxfieldBinderGui:
     def run_assignment(self):
         input_csv = Path(self.ent_input.get().strip())
         alkoo_csv = Path(self.ent_alkoo.get().strip())
+        largepleather_csv = Path(self.ent_largepleather.get().strip())
         pleather_csv = Path(self.ent_pleather.get().strip())
 
         if not input_csv.is_file():
@@ -286,18 +345,15 @@ class MoxfieldBinderGui:
         if not alkoo_csv.is_file():
             messagebox.showerror("Error", f"Existing ALKOO Case CSV not found:\n{alkoo_csv}")
             return
+        if not largepleather_csv.is_file():
+            messagebox.showerror("Error", f"Existing Large Pleather CSV not found:\n{largepleather_csv}")
+            return
         if not pleather_csv.is_file():
             messagebox.showerror("Error", f"Existing Small Pleather CSV not found:\n{pleather_csv}")
             return
 
         self.save_last_used_paths()
 
-        self.txt_logs.configure(state='normal')
-        self.txt_logs.delete("1.0", tk.END)
-        self.txt_logs.configure(state='disabled')
-
-        self.logger.info("Starting Moxfield card categorization assignment...")
-        
         # Get active ALKOO sets from text box
         content = self.txt_alkoo_sets.get("1.0", tk.END).strip()
         alkoo_sets = set()
@@ -306,14 +362,38 @@ class MoxfieldBinderGui:
             if token_clean:
                 alkoo_sets.add(token_clean)
 
+        # Get active Large Pleather sets from text box
+        lp_content = self.txt_largepleather_sets.get("1.0", tk.END).strip()
+        largepleather_sets = set()
+        for token in lp_content.replace(',', ' ').split():
+            token_clean = token.strip().upper()
+            if token_clean:
+                largepleather_sets.add(token_clean)
+
+        # Overlap Check
+        overlap = alkoo_sets.intersection(largepleather_sets)
+        if overlap:
+            msg = f"Overlap detected in set codes between ALKOO and Large Pleather:\n{', '.join(sorted(list(overlap)))}\n\nDo you want to proceed anyway prioritizing Large Pleather?"
+            if not messagebox.askyesno("Set Code Overlap Warning", msg):
+                self.logger.info("Assignment cancelled by user due to set code overlap.")
+                return
+
+        self.txt_logs.configure(state='normal')
+        self.txt_logs.delete("1.0", tk.END)
+        self.txt_logs.configure(state='disabled')
+
+        self.logger.info("Starting Moxfield card categorization assignment...")
+
         try:
             counts, swaps, binders = assign_cards_to_binders(
                 input_csv=input_csv,
                 alkoo_inventory_csv=alkoo_csv,
                 pleather_inventory_csv=pleather_csv,
+                largepleather_inventory_csv=largepleather_csv,
                 output_dir=OUTPUT_DIR,
                 logger=self.logger,
-                alkoo_sets=alkoo_sets
+                alkoo_sets=alkoo_sets,
+                largepleather_sets=largepleather_sets
             )
             
             self.logger.info("\n" + "="*70)
@@ -373,7 +453,7 @@ class MoxfieldBinderGui:
             self.txt_alkoo_sets.delete("1.0", tk.END)
             content = ", ".join(sorted(list(sets)))
             self.txt_alkoo_sets.insert("1.0", content)
-            self.last_saved_content = content
+            self.last_saved_alkoo = content
             self.lbl_editor_status.config(text="Loaded alkoo.txt successfully", fg="green")
             self.logger.info("Loaded ALKOO set codes from alkoo.txt")
         except Exception as e:
@@ -389,7 +469,7 @@ class MoxfieldBinderGui:
                 if token_clean:
                     sets.add(token_clean)
             write_alkoo_sets(sets, ALKOO_FILE)
-            self.last_saved_content = content
+            self.last_saved_alkoo = content
             self.lbl_editor_status.config(text="Saved to alkoo.txt successfully", fg="green")
             self.logger.info("Saved ALKOO set codes to alkoo.txt")
             messagebox.showinfo("Success", "Successfully saved ALKOO set codes to alkoo.txt")
@@ -397,10 +477,41 @@ class MoxfieldBinderGui:
             self.logger.error(f"Failed to save alkoo.txt: {e}")
             messagebox.showerror("Error", f"Failed to save alkoo.txt: {e}")
 
+    def load_largepleather_sets_from_file(self):
+        try:
+            sets = load_largepleather_sets(LARGEPLEATHER_FILE)
+            self.txt_largepleather_sets.delete("1.0", tk.END)
+            content = ", ".join(sorted(list(sets)))
+            self.txt_largepleather_sets.insert("1.0", content)
+            self.last_saved_largepleather = content
+            self.lbl_lp_editor_status.config(text="Loaded largepleather.txt successfully", fg="green")
+            self.logger.info("Loaded Large Pleather set codes from largepleather.txt")
+        except Exception as e:
+            self.logger.error(f"Failed to load largepleather.txt: {e}")
+            messagebox.showerror("Error", f"Failed to load largepleather.txt: {e}")
+
+    def save_largepleather_sets(self):
+        try:
+            content = self.txt_largepleather_sets.get("1.0", tk.END).strip()
+            sets = set()
+            for token in content.replace(',', ' ').split():
+                token_clean = token.strip().upper()
+                if token_clean:
+                    sets.add(token_clean)
+            write_largepleather_sets(sets, LARGEPLEATHER_FILE)
+            self.last_saved_largepleather = content
+            self.lbl_lp_editor_status.config(text="Saved to largepleather.txt successfully", fg="green")
+            self.logger.info("Saved Large Pleather set codes to largepleather.txt")
+            messagebox.showinfo("Success", "Successfully saved Large Pleather set codes to largepleather.txt")
+        except Exception as e:
+            self.logger.error(f"Failed to save largepleather.txt: {e}")
+            messagebox.showerror("Error", f"Failed to save largepleather.txt: {e}")
+
     def on_close(self):
-        current_content = self.txt_alkoo_sets.get("1.0", tk.END).strip()
-        if current_content != self.last_saved_content.strip():
-            if not messagebox.askyesno("Are you sure?", "You have unsaved changes in the text input box. Are you sure you want to close without saving?"):
+        current_alkoo = self.txt_alkoo_sets.get("1.0", tk.END).strip()
+        current_lp = self.txt_largepleather_sets.get("1.0", tk.END).strip()
+        if current_alkoo != self.last_saved_alkoo.strip() or current_lp != self.last_saved_largepleather.strip():
+            if not messagebox.askyesno("Are you sure?", "You have unsaved changes in the set configuration input boxes. Are you sure you want to close without saving?"):
                 return
         self.save_last_used_paths()
         self.root.destroy()
@@ -420,6 +531,22 @@ class MoxfieldBinderGui:
         self.txt_alkoo_sets.delete("1.0", tk.END)
         self.lbl_editor_status.config(text="Cleared", fg="black")
         self.logger.info("Cleared ALKOO set codes text box")
+
+    def reset_largepleather_sets(self):
+        try:
+            sets = load_largepleather_sets(LARGEPLEATHER_BASE_FILE, fallback_to_base=True)
+            self.txt_largepleather_sets.delete("1.0", tk.END)
+            self.txt_largepleather_sets.insert("1.0", ", ".join(sorted(list(sets))))
+            self.lbl_lp_editor_status.config(text="Reset to default sets", fg="orange")
+            self.logger.info("Reset Large Pleather set codes in UI to default list (from largepleather_base.txt)")
+        except Exception as e:
+            self.logger.error(f"Failed to reset sets: {e}")
+            messagebox.showerror("Error", f"Failed to reset sets: {e}")
+
+    def clear_largepleather_sets(self):
+        self.txt_largepleather_sets.delete("1.0", tk.END)
+        self.lbl_lp_editor_status.config(text="Cleared", fg="black")
+        self.logger.info("Cleared Large Pleather set codes text box")
 
 if __name__ == "__main__":
     root = tk.Tk()

@@ -80,6 +80,69 @@ def write_alkoo_sets(sets: Set[str], file_path: Optional[Path] = None):
 ALKOO_SETS = load_alkoo_sets()
 
 
+# --- Set Codes for Large Pleather ---
+DEFAULT_LARGEPLEATHER_SETS = {
+    "40K", "BRC", "DOM", "DSC", "M3C", "MKC", "MKM", "NCC", "OTC", "PIP", "SCD", "SDC", "TDC", "TMC"
+}
+
+def load_largepleather_sets(file_path: Optional[Path] = None, fallback_to_base: bool = True) -> Set[str]:
+    """
+    Loads Large Pleather set codes from a file.
+    If the specified file_path doesn't exist, we load from largepleather_base.txt and initialize the file_path with it.
+    """
+    if file_path is None:
+        file_path = SCRIPT_DIR / "largepleather.txt"
+    
+    if file_path.is_file():
+        try:
+            with file_path.open('r', encoding='utf-8') as f:
+                content = f.read()
+            sets = set()
+            for token in content.replace(',', ' ').split():
+                token_clean = token.strip().upper()
+                if token_clean:
+                    sets.add(token_clean)
+            return sets
+        except Exception:
+            pass
+
+    # If active file doesn't exist, try largepleather_base.txt
+    base_path = SCRIPT_DIR / "largepleather_base.txt"
+    base_sets = set()
+    if fallback_to_base and base_path.is_file():
+        try:
+            with base_path.open('r', encoding='utf-8') as f:
+                content = f.read()
+            for token in content.replace(',', ' ').split():
+                token_clean = token.strip().upper()
+                if token_clean:
+                    base_sets.add(token_clean)
+        except Exception:
+            pass
+
+    if not base_sets:
+        base_sets = set(DEFAULT_LARGEPLEATHER_SETS)
+
+    # Initialize largepleather.txt with the base set
+    try:
+        write_largepleather_sets(base_sets, file_path)
+    except Exception:
+        pass
+
+    return base_sets
+
+def write_largepleather_sets(sets: Set[str], file_path: Optional[Path] = None):
+    """Writes the set codes (one per line) to the specified file."""
+    if file_path is None:
+        file_path = SCRIPT_DIR / "largepleather.txt"
+    sorted_sets = sorted(list(sets))
+    with file_path.open('w', encoding='utf-8') as f:
+        f.write("\n".join(sorted_sets) + "\n")
+
+# Default LARGEPLEATHER_SETS is loaded from the files
+LARGEPLEATHER_SETS = load_largepleather_sets()
+
+
 def is_foil(row: Dict) -> bool:
     """Returns True if the card row is a foil or etched version."""
     raw = row.get('Foil', '').strip().lower()
@@ -156,23 +219,34 @@ def assign_cards_to_binders(
     input_csv: Path,
     alkoo_inventory_csv: Path,
     pleather_inventory_csv: Path,
+    largepleather_inventory_csv: Path,
     output_dir: Path,
     logger: logging.Logger,
-    alkoo_sets: Optional[Set[str]] = None
+    alkoo_sets: Optional[Set[str]] = None,
+    largepleather_sets: Optional[Set[str]] = None
 ) -> Tuple[Dict[str, int], List[str], Dict[str, List[str]]]:
     """
-    Categorizes the incoming CSV card list into 6 binders based on the rule flow.
+    Categorizes the incoming CSV card list into 7 binders based on the rule flow.
     Returns: (counts_dict, swap_action_strings, card_names_per_binder_dict)
     """
     if alkoo_sets is None:
         alkoo_sets = load_alkoo_sets()
+    if largepleather_sets is None:
+        largepleather_sets = load_largepleather_sets()
+
+    # Check for overlap between sets
+    overlap = alkoo_sets.intersection(largepleather_sets)
+    if overlap:
+        logger.warning(f"WARNING: Overlap detected in set codes between ALKOO and Large Pleather: {', '.join(sorted(list(overlap)))}")
 
     logger.info("Loading existing collection inventories...")
     alkoo_inv = load_existing_inventory(alkoo_inventory_csv)
     pleather_inv = load_existing_inventory(pleather_inventory_csv)
+    largepleather_inv = load_existing_inventory(largepleather_inventory_csv)
     
     logger.info(f"Loaded {len(alkoo_inv)} card entries from ALKOO Case.")
     logger.info(f"Loaded {len(pleather_inv)} card entries from Small Pleather.")
+    logger.info(f"Loaded {len(largepleather_inv)} card entries from Large Pleather.")
 
     # Read incoming card file
     incoming_rows: List[Dict] = []
@@ -221,6 +295,9 @@ def assign_cards_to_binders(
         if name_key in pleather_inv:
             for inv_row in pleather_inv[name_key]:
                 add_query(inv_row)
+        if name_key in largepleather_inv:
+            for inv_row in largepleather_inv[name_key]:
+                add_query(inv_row)
 
     logger.info(f"Resolving {len(scryfall_queries)} unique card details against Scryfall...")
     scryfall_core.resolve_cards(scryfall_queries)
@@ -230,6 +307,7 @@ def assign_cards_to_binders(
     
     yellow_and_basics = []
     alkoo_candidates = []
+    largepleather_candidates = []
     pleather_candidates = []
     
     for row in incoming_rows:
@@ -265,6 +343,9 @@ def assign_cards_to_binders(
         # Basic land (Rule 3)
         elif card_is_basic:
             yellow_and_basics.append(row)
+        # Rule 2b Check: Non-land in Large Pleather Set Codes (Prioritized over ALKOO)
+        elif not card_is_land and set_code in largepleather_sets:
+            largepleather_candidates.append(row)
         # Rule 2 Check: Non-land in ALKOO Set Codes
         elif not card_is_land and set_code in alkoo_sets:
             alkoo_candidates.append(row)
@@ -312,6 +393,7 @@ def assign_cards_to_binders(
                     f"routed directly to Duplicates/Unwanted (Best version '{best_row['Name']}' ({best_row.get('Edition', '')}) Score: {get_row_score(best_row):.1f} retained)"
                 )
 
+    deduplicate_pool(largepleather_candidates, "Large Pleather", group_by_set=True)
     deduplicate_pool(alkoo_candidates, "ALKOO", group_by_set=True)
     deduplicate_pool(pleather_candidates, "Pleather", group_by_set=False)
 
@@ -320,6 +402,7 @@ def assign_cards_to_binders(
     # Binder Categories lists
     binders: Dict[str, List[Dict]] = {
         "Binder - Yellow": [],
+        "Binder - Large Pleather": [],
         "Binder - ALKOO Case": [],
         "Binder - Basics": [],
         "Binder - Fancy Basics": [],
@@ -372,8 +455,49 @@ def assign_cards_to_binders(
             logger.info(f"[Rule 1] Assigned '{name}' to Yellow Binder (Valued: £{max(usd * USD_TO_GBP, eur * EUR_TO_GBP):.2f} GBP)")
             continue
 
-        # Rule 2: Non-land in ALKOO Set Codes
+        # Rule 2b: Non-land in Large Pleather Set Codes (Prioritized over ALKOO)
         card_is_land = "land" in type_line.lower()
+        if not card_is_land and set_code in largepleather_sets:
+            existing_same_set = []
+            if name_key in largepleather_inv:
+                for inv_row in largepleather_inv[name_key]:
+                    if inv_row.get("Edition", "").strip().upper() == set_code:
+                        existing_same_set.append(inv_row)
+                        
+            if existing_same_set:
+                # Find maximum fanciness score in existing Large Pleather inventory for this card name and set
+                max_existing_score = -1.0
+                best_existing_row = None
+                for inv_row in existing_same_set:
+                    inv_query = {
+                        "name": inv_row.get("Name", "").strip(),
+                        "set": inv_row.get("Edition", "").strip(),
+                        "collector_number": inv_row.get("Collector Number", "").strip()
+                    }
+                    inv_scry, _ = scryfall_core.load_from_cache(inv_query)
+                    score = get_fanciness_score(inv_row, inv_scry)
+                    if score > max_existing_score:
+                        max_existing_score = score
+                        best_existing_row = inv_row
+ 
+                if incoming_fanciness > max_existing_score:
+                    binders["Binder - Large Pleather"].append(row)
+                    f_desc_incoming = "foil" if card_is_foil else "non-foil"
+                    f_desc_existing = "foil" if is_foil(best_existing_row) else "non-foil"
+                    swap_notes.append(
+                        f"Large Pleather: Swap out existing {f_desc_existing} version of '{name}' ({set_code}) (Score: {max_existing_score:.1f}) "
+                        f"with incoming fancier {f_desc_incoming} version (Score: {incoming_fanciness:.1f})"
+                    )
+                    logger.info(f"[Rule 2b] Assigned '{name}' to Large Pleather as Fanciness Upgrade (Set: {set_code})")
+                else:
+                    binders["Binder - Duplicates and Unwanted"].append(row)
+                    logger.info(f"[Rule 2b] Routed '{name}' to Duplicates and Unwanted (Already exists in Large Pleather with equal/better fanciness for set {set_code})")
+            else:
+                binders["Binder - Large Pleather"].append(row)
+                logger.info(f"[Rule 2b] Assigned '{name}' to Large Pleather (New card, Set: {set_code})")
+            continue
+
+        # Rule 2: Non-land in ALKOO Set Codes
         if not card_is_land and set_code in alkoo_sets:
             existing_same_set = []
             if name_key in alkoo_inv:
@@ -476,7 +600,7 @@ def assign_cards_to_binders(
                 color_identity = []
             
             wubrg_key = get_card_wubrg_sort_key(name, type_line, color_identity)
-            if binder_name == "Binder - ALKOO Case":
+            if binder_name in ("Binder - ALKOO Case", "Binder - Large Pleather"):
                 set_code = row.get("Edition", "").strip().upper()
                 return (set_code, wubrg_key)
             return wubrg_key

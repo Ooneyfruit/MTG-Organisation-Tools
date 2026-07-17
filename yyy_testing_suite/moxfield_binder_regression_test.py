@@ -25,7 +25,9 @@ from moxfield_binder_logic import (
     assign_cards_to_binders,
     is_foil,
     load_alkoo_sets,
-    write_alkoo_sets
+    write_alkoo_sets,
+    load_largepleather_sets,
+    write_largepleather_sets
 )
 
 # Test Data Paths (pointing to directory under yyy_testing_suite)
@@ -33,6 +35,7 @@ TEST_DATA_DIR = SCRIPT_DIR / "moxfield_binder_assigner" / "test_data"
 TEST_INPUT = TEST_DATA_DIR / "test_input_cards.csv"
 TEST_ALKOO = TEST_DATA_DIR / "test_alkoo_inventory.csv"
 TEST_PLEATHER = TEST_DATA_DIR / "test_pleather_inventory.csv"
+TEST_LARGEPLEATHER = TEST_DATA_DIR / "test_largepleather_inventory.csv"
 TEST_OUTPUT_DIR = TEST_DATA_DIR / "outputs"
 
 class TestScryfallCacheHealing(unittest.TestCase):
@@ -142,6 +145,7 @@ class TestBinderClassificationLogic(unittest.TestCase):
             input_csv=TEST_INPUT,
             alkoo_inventory_csv=TEST_ALKOO,
             pleather_inventory_csv=TEST_PLEATHER,
+            largepleather_inventory_csv=TEST_LARGEPLEATHER,
             output_dir=TEST_OUTPUT_DIR,
             logger=logger
         )
@@ -149,6 +153,7 @@ class TestBinderClassificationLogic(unittest.TestCase):
         # 1. Check foil upgrades (swaps)
         self.assertIn("ALKOO Case: Swap out existing non-foil version of 'ExistingALKOOCard' (DFT) (Score: 0.0) with incoming fancier foil version (Score: 100.0)", swaps)
         self.assertIn("Small Pleather: Swap out existing non-foil version of 'ExistingPleatherCard' (Score: 0.0) with incoming fancier foil version (Score: 100.0)", swaps)
+        self.assertIn("Large Pleather: Swap out existing non-foil version of 'ExistingLargePleatherCard' (40K) (Score: 0.0) with incoming fancier foil version (Score: 100.0)", swaps)
 
         # 2. Check internal duplicate routing (NewPleatherCard twice in input, row 8 & 9)
         # One copy should go to Small Pleather, the duplicate one to Duplicates/Unwanted
@@ -156,6 +161,11 @@ class TestBinderClassificationLogic(unittest.TestCase):
         duplicate_names = [r["Name"] for r in binders["Binder - Duplicates and Unwanted"]]
         self.assertEqual(pleather_names.count("NewPleatherCard"), 1)
         self.assertEqual(duplicate_names.count("NewPleatherCard"), 1)
+
+        # Also check Large Pleather internal duplicates
+        lp_names = [r["Name"] for r in binders["Binder - Large Pleather"]]
+        self.assertEqual(lp_names.count("NewLargePleatherCard"), 1)
+        self.assertEqual(duplicate_names.count("NewLargePleatherCard"), 1)
 
         # 3. Check outputs were physically created and retained under test_data/outputs/
         self.assertTrue(TEST_OUTPUT_DIR.exists())
@@ -179,6 +189,23 @@ class TestAlkooSets(unittest.TestCase):
         loaded = load_alkoo_sets(self.temp_file, fallback_to_base=False)
         self.assertEqual(loaded, test_sets)
 
+class TestLargePleatherSets(unittest.TestCase):
+    def setUp(self):
+        self.temp_file = Path(__file__).parent / "temp_largepleather.txt"
+        if self.temp_file.exists():
+            self.temp_file.unlink()
+
+    def tearDown(self):
+        if self.temp_file.exists():
+            self.temp_file.unlink()
+
+    def test_load_and_write_largepleather_sets(self):
+        test_sets = {"40K", "BRC", "PIP"}
+        write_largepleather_sets(test_sets, self.temp_file)
+        
+        loaded = load_largepleather_sets(self.temp_file, fallback_to_base=False)
+        self.assertEqual(loaded, test_sets)
+
     @patch('_core_tools.scryfall_core.load_from_cache')
     @patch('_core_tools.scryfall_core.resolve_cards')
     def test_custom_alkoo_sets_routing(self, mock_resolve, mock_cache):
@@ -196,6 +223,7 @@ class TestAlkooSets(unittest.TestCase):
             input_csv=TEST_INPUT,
             alkoo_inventory_csv=TEST_ALKOO,
             pleather_inventory_csv=TEST_PLEATHER,
+            largepleather_inventory_csv=TEST_LARGEPLEATHER,
             output_dir=TEST_OUTPUT_DIR,
             logger=logger,
             alkoo_sets={"CUST"}
@@ -243,6 +271,7 @@ class TestBasicLandsDeduplication(unittest.TestCase):
                 input_csv=temp_input,
                 alkoo_inventory_csv=TEST_ALKOO,
                 pleather_inventory_csv=TEST_PLEATHER,
+                largepleather_inventory_csv=TEST_LARGEPLEATHER,
                 output_dir=TEST_OUTPUT_DIR,
                 logger=logger
             )
@@ -300,6 +329,7 @@ class TestSeparatePoolDeduplication(unittest.TestCase):
                 input_csv=temp_input,
                 alkoo_inventory_csv=TEST_ALKOO,
                 pleather_inventory_csv=TEST_PLEATHER,
+                largepleather_inventory_csv=TEST_LARGEPLEATHER,
                 output_dir=TEST_OUTPUT_DIR,
                 logger=logger,
                 alkoo_sets={"MOM"}
@@ -362,6 +392,7 @@ class TestAlkooSorting(unittest.TestCase):
                 input_csv=temp_input,
                 alkoo_inventory_csv=TEST_ALKOO,
                 pleather_inventory_csv=TEST_PLEATHER,
+                largepleather_inventory_csv=TEST_LARGEPLEATHER,
                 output_dir=TEST_OUTPUT_DIR,
                 logger=logger,
                 alkoo_sets={"BLB", "MOM"}
@@ -432,6 +463,7 @@ class TestPleatherNameOnlyDeduplication(unittest.TestCase):
                 input_csv=temp_input,
                 alkoo_inventory_csv=TEST_ALKOO,
                 pleather_inventory_csv=TEST_PLEATHER,
+                largepleather_inventory_csv=TEST_LARGEPLEATHER,
                 output_dir=TEST_OUTPUT_DIR,
                 logger=logger,
                 alkoo_sets=set()  # No ALKOO sets, so both are Pleather candidates

@@ -4,7 +4,7 @@ import datetime
 from pathlib import Path
 from typing import Optional
 
-from moxfield_binder_logic import assign_cards_to_binders, is_foil
+from moxfield_binder_logic import assign_cards_to_binders, is_foil, load_alkoo_sets, load_largepleather_sets
 
 # --- Configurations ---
 SCRIPT_DIR = Path(__file__).parent
@@ -18,6 +18,7 @@ def get_default_path(filename: str) -> Optional[Path]:
 DEFAULT_INPUT = get_default_path("20260628_184333-regular-cards.csv")
 DEFAULT_ALKOO = get_default_path("ALKOO_moxfield_haves_2026-06-28-1818Z.csv")
 DEFAULT_PLEATHER = get_default_path("SmallPleather_moxfield_haves_2026-06-28-1818Z.csv")
+DEFAULT_LARGEPLEATHER = None
 OUTPUT_DIR = SCRIPT_DIR / "outputs"
 
 def setup_logging() -> logging.Logger:
@@ -62,8 +63,20 @@ def main():
     logger.info("         MOXFIELD BINDER ASSIGNER CLI")
     logger.info("=" * 60)
     
+    # Overlap validation on set configuration files before asking for other details
+    alkoo_sets = load_alkoo_sets()
+    largepleather_sets = load_largepleather_sets()
+    overlap = alkoo_sets.intersection(largepleather_sets)
+    if overlap:
+        print(f"\n[WARNING] Overlap detected in set codes between ALKOO and Large Pleather: {', '.join(sorted(list(overlap)))}")
+        cont = input("Do you wish to continue categorization prioritizing Large Pleather? (y/n): ").strip().lower()
+        if cont not in ('y', 'yes'):
+            logger.info("Execution cancelled by user due to set code overlap.")
+            sys.exit(0)
+
     input_csv = prompt_file("Incoming Card List CSV", DEFAULT_INPUT)
     alkoo_csv = prompt_file("Existing ALKOO Case CSV", DEFAULT_ALKOO)
+    largepleather_csv = prompt_file("Existing Large Pleather CSV", DEFAULT_LARGEPLEATHER)
     pleather_csv = prompt_file("Existing Small Pleather CSV", DEFAULT_PLEATHER)
     
     logger.info("\nStarting classification...")
@@ -72,8 +85,11 @@ def main():
             input_csv=input_csv,
             alkoo_inventory_csv=alkoo_csv,
             pleather_inventory_csv=pleather_csv,
+            largepleather_inventory_csv=largepleather_csv,
             output_dir=OUTPUT_DIR,
-            logger=logger
+            logger=logger,
+            alkoo_sets=alkoo_sets,
+            largepleather_sets=largepleather_sets
         )
         
         logger.info("\n" + "="*70)

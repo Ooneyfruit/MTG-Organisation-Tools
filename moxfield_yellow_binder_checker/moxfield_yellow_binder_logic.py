@@ -171,10 +171,26 @@ def check_binders(
                     new_row['Tags'] = f"{orig_tags}, {tag_to_add}"
                 else:
                     new_row['Tags'] = tag_to_add
+                new_row['_source_binder'] = binder_name
                 move_to_yellow.append(new_row)
 
     # Sort lists using the color ordering tool
-    def sort_key(row):
+    # For move_to_yellow, the primary key is the source binder name, secondary key is color sort
+    def sort_key_move(row):
+        source_binder = row.get('_source_binder', '').lower()
+        q = {
+            'name': row['Name'].strip(),
+            'set': row.get('Edition', '').strip(),
+            'collector_number': row.get('Collector Number', '').strip()
+        }
+        data, _ = scryfall_core.load_from_cache(q)
+        if data:
+            color_key = get_card_wubrg_sort_key(row['Name'].strip(), data.get('type_line', ''), data.get('color_identity', []))
+        else:
+            color_key = (0, (5,), row['Name'].strip().lower().replace("-", ""))
+        return (source_binder, color_key)
+
+    def sort_key_remove(row):
         q = {
             'name': row['Name'].strip(),
             'set': row.get('Edition', '').strip(),
@@ -185,8 +201,11 @@ def check_binders(
             return get_card_wubrg_sort_key(row['Name'].strip(), data.get('type_line', ''), data.get('color_identity', []))
         return (0, (5,), row['Name'].strip().lower().replace("-", ""))
 
-    move_to_yellow = sorted(move_to_yellow, key=sort_key)
-    remove_from_yellow = sorted(remove_from_yellow, key=sort_key)
+    move_to_yellow = sorted(move_to_yellow, key=sort_key_move)
+    for r in move_to_yellow:
+        r.pop('_source_binder', None)
+
+    remove_from_yellow = sorted(remove_from_yellow, key=sort_key_remove)
 
     if progress_callback:
         progress_callback("Done processing.")

@@ -1,8 +1,11 @@
 import os
 import re
 import json
+import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
+
+logger = logging.getLogger("moxfield_yellow_binder")
 
 # Conversion rates
 try:
@@ -121,9 +124,11 @@ def is_manipulated(usd: float, eur: float, card_name: str = "") -> bool:
     if usd > eur:
         low_threshold = 0.70
         diff_threshold = 0.80
+        bias_str = " (European market bias active: USD > EUR)"
     else:
         low_threshold = 0.55
         diff_threshold = 1.30
+        bias_str = ""
     
     if low >= low_threshold:
         return False
@@ -132,6 +137,7 @@ def is_manipulated(usd: float, eur: float, card_name: str = "") -> bool:
         return False
         
     # Potential manipulation! Check other printings in the cache.
+    logger.info(f"Checking potential manipulation for '{card_name}' (USD: ${usd:.2f}, EUR: €{eur:.2f}){bias_str}")
     other_prices = get_other_cache_prices(card_name)
     if other_prices:
         has_valuable_printing = False
@@ -143,7 +149,12 @@ def is_manipulated(usd: float, eur: float, card_name: str = "") -> bool:
                 has_valuable_printing = True
                 break
         if has_valuable_printing:
+            logger.info(f"Legit card '{card_name}': other cached printings support the price.")
             return False  # Legit card, other printings support the price
+        else:
+            logger.warning(f"Confirmed manipulation/outlier for '{card_name}': all other cached printings are cheap (< 1.0).")
+    else:
+        logger.warning(f"Confirmed manipulation/outlier for '{card_name}': no other printings cached to verify.")
             
     return True
 
@@ -158,5 +169,9 @@ def meets_threshold(usd: float, eur: float, gbp: float, card_name: str = "") -> 
     usd_gbp = usd * USD_TO_GBP
     eur_gbp = eur * EUR_TO_GBP
     if eur_gbp < 0.75:
+        logger.info(f"Card '{card_name}' EUR price converted to GBP (£{eur_gbp:.2f}) is below 75p limit. Skipping.")
         return False
-    return usd_gbp >= 1.0 or eur_gbp >= 1.0
+    meets = usd_gbp >= 1.0 or eur_gbp >= 1.0
+    if not meets:
+        logger.info(f"Card '{card_name}' does not meet £1.00 threshold (USD GBP: £{usd_gbp:.2f}, EUR GBP: £{eur_gbp:.2f}).")
+    return meets
