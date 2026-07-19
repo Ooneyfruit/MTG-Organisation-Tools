@@ -181,7 +181,11 @@ class TestScryfallCore(unittest.TestCase):
                 "full_art": False,
                 "frame_effects": [],
                 "promo_types": [],
-                "promo": False
+                "promo": False,
+                "border_color": "black",
+                "artist": "Test Artist",
+                "rarity": "rare",
+                "edhrec_rank": 100
             }
         }
         with open(filepath, 'w', encoding='utf-8') as f:

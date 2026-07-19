@@ -81,6 +81,9 @@ def load_from_cache(card_parsed):
                             or "frame_effects" not in scry_data
                             or "promo_types" not in scry_data
                             or "promo" not in scry_data
+                            or "artist" not in scry_data
+                            or "rarity" not in scry_data
+                            or "edhrec_rank" not in scry_data
                         ):
                             # Out of date cache schema; return None to trigger fresh fetch
                             continue
@@ -144,7 +147,10 @@ def save_to_cache(card_parsed, scryfall_data, query_type_used, query_params_used
         "frame_effects": scryfall_data.get("frame_effects", []),
         "promo_types": scryfall_data.get("promo_types", []),
         "promo": scryfall_data.get("promo", False),
-        "border_color": scryfall_data.get("border_color", "black")
+        "border_color": scryfall_data.get("border_color", "black"),
+        "artist": scryfall_data.get("artist", ""),
+        "rarity": scryfall_data.get("rarity", ""),
+        "edhrec_rank": scryfall_data.get("edhrec_rank")
     }
     
     endpoint_templates = {
@@ -274,9 +280,13 @@ def resolve_cards(cards):
     """
     uncached = []
     cached_count = 0
+    total = len(cards)
     
     # 1. Check Cache
-    for card in cards:
+    for idx, card in enumerate(cards, 1):
+        if idx % 1000 == 0 or idx == total:
+            print(f"Checking cache: {idx}/{total} cards verified...")
+            sys.stdout.flush()
         data, path = load_from_cache(card)
         if data:
             cached_count += 1
@@ -284,12 +294,17 @@ def resolve_cards(cards):
             uncached.append(card)
             
     print(f"Cache status: {cached_count} card(s) found in cache, {len(uncached)} card(s) need to be fetched.")
+    sys.stdout.flush()
     
     # 2. Batch Query Uncached Cards
     if uncached:
         BATCH_SIZE = 75
+        total_batches = (len(uncached) - 1) // BATCH_SIZE + 1
         for i in range(0, len(uncached), BATCH_SIZE):
             batch = uncached[i:i+BATCH_SIZE]
+            batch_num = i // BATCH_SIZE + 1
+            print(f"--> Batch querying Scryfall for batch {batch_num}/{total_batches} ({len(batch)} cards)...")
+            sys.stdout.flush()
             fetch_cards_batch_from_scryfall(batch)
 
 def load_set_metadata_from_cache(set_code):

@@ -85,7 +85,10 @@ class TestScryfallCacheHealing(unittest.TestCase):
                 "frame_effects": [],
                 "promo_types": [],
                 "promo": False,
-                "border_color": "black"
+                "border_color": "black",
+                "artist": "Test Artist",
+                "rarity": "rare",
+                "edhrec_rank": 100
             }
         }
         with open(self.filepath, 'w', encoding='utf-8') as f:

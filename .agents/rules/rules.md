@@ -1,5 +1,8 @@
 # Agent Guidelines & Codebase Rulebook (`_MTG`)
 
+> [!IMPORTANT]
+> **CRITICAL LOCATION RULE**: These agent instruction/rule files MUST remain in the `_MTG/.agents/rules/` directory. Under no circumstances should they be moved, renamed, or relocated from this folder, as the agent system relies on this specific path to load local guidelines.
+
 Welcome, Agent. This workspace contains a suite of automation tools for Magic: The Gathering card collections. Please adhere to the following directory structure, script rules, and development guidelines.
 
 ---
